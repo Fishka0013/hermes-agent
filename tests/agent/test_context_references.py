@@ -8,6 +8,26 @@ from unittest.mock import patch
 import pytest
 
 
+def _set_model_root(monkeypatch, root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(root),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
+    return root
+
+
+@pytest.fixture(autouse=True)
+def _model_workspace_root(tmp_path, monkeypatch):
+    _set_model_root(monkeypatch, tmp_path)
+
+
 def _git(cwd: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -617,12 +637,11 @@ async def test_side_thread_expansion_guards_the_served_profile_home(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_composer_paste_outside_workspace_is_attached_but_sibling_dir_is_not(tmp_path, monkeypatch):
-    """Desktop saves a large paste under <HERMES_HOME>/composer-pastes and attaches it
-    as `@file:`; the chat cwd is almost never an ancestor of that directory, so the
-    workspace guard must admit exactly that anchored root (#117149) — and nothing
-    that merely contains the substring next to it."""
+async def test_composer_paste_requires_trusted_staging(tmp_path, monkeypatch):
+    """Raw Hermes-internal paste paths are not model authority; staged copies are."""
     from agent.context_references import preprocess_context_references_async
+    from agent.model_file_policy import (
+        make_internal_artifact_source, publish_internal_artifact_for_model)
 
     monkeypatch.setenv("HOME", str(tmp_path))
     hermes_home = tmp_path / ".hermes"
@@ -633,17 +652,20 @@ async def test_composer_paste_outside_workspace_is_attached_but_sibling_dir_is_n
     lookalike = hermes_home / "my-composer-pastes-backup" / "secret.txt"
     lookalike.parent.mkdir(parents=True)
     lookalike.write_text("LOOKALIKE-SECRET\n", encoding="utf-8")
-    workspace = tmp_path / "project"
-    workspace.mkdir()
+    workspace = _set_model_root(monkeypatch, tmp_path / "project")
 
-    result = await preprocess_context_references_async(
+    raw = await preprocess_context_references_async(
         f"see @file:{paste} and @file:{lookalike}",
-        cwd=workspace,
-        allowed_root=workspace,
-        context_length=100_000,
-    )
+        cwd=workspace, allowed_root=workspace, context_length=100_000)
+    assert "PASTED-BODY-MARKER" not in raw.message
+    assert "LOOKALIKE-SECRET" not in raw.message
+    assert all("outside MODEL_WORKSPACE_ROOT" in w for w in raw.warnings)
 
+    staged = publish_internal_artifact_for_model(
+        make_internal_artifact_source(paste, source_class="composer-paste", source_id="1"),
+        namespace="inbound", session_id="composer")
+    result = await preprocess_context_references_async(
+        f"see @file:{staged.path}",
+        cwd=workspace, allowed_root=workspace, context_length=100_000)
     assert result.expanded
     assert "PASTED-BODY-MARKER" in result.message
-    assert "LOOKALIKE-SECRET" not in result.message
-    assert "outside the allowed workspace" in "\n".join(result.warnings)

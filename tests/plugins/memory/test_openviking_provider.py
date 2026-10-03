@@ -26,6 +26,16 @@ def _clear_openviking_tenant_env(monkeypatch):
 def _isolate_openviking_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     monkeypatch.setattr(openviking_module.Path, "home", staticmethod(lambda: home))
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(tmp_path),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
 
 
 def _clear_openviking_env(monkeypatch):
@@ -625,6 +635,20 @@ def test_tool_search_sorts_by_raw_score_across_buckets():
     ]
     assert [entry["score"] for entry in result["results"]] == [0.9, 0.9, 0.9]
     assert result["total"] == 3
+
+
+def test_tool_add_resource_blocks_outside_model_workspace(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-resource.txt"
+    outside.write_text("outside\n", encoding="utf-8")
+    provider = OpenVikingMemoryProvider()
+    provider._client = MagicMock()
+    try:
+        result = json.loads(provider._tool_add_resource({"url": str(outside)}))
+    finally:
+        outside.unlink(missing_ok=True)
+    assert "outside MODEL_WORKSPACE_ROOT" in result["error"]
+    provider._client.upload_temp_file.assert_not_called()
+    provider._client.post.assert_not_called()
 
 
 def test_tool_add_resource_rejects_hermes_credential_file_upload(tmp_path, monkeypatch):

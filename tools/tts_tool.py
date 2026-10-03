@@ -283,6 +283,7 @@ def _session_platform() -> tuple:
 
 def _resolve_output_base(
     output_path: Optional[str], provider: str, command_provider_config: Optional[Dict[str, Any]], want_opus: bool,
+    task_id: Optional[str] = None,
 ) -> tuple:
     """Pick the output file -> ``(Path, None)`` or ``(None, error_json)``.
 
@@ -307,6 +308,18 @@ def _resolve_output_base(
         file_path = Path(output_path).expanduser()
         if command_provider_config is not None:
             file_path = _configured_command_tts_output_path(file_path, command_provider_config)
+        try:
+            from agent.model_file_policy import resolve_model_write_path, validate_resolution_base
+            if file_path.is_absolute():
+                file_path = resolve_model_write_path(str(file_path))
+            else:
+                from tools.file_tools_paths import _resolve_base_dir
+                base = validate_resolution_base(
+                    str(_resolve_base_dir(task_id or "default", container_paths=False)))
+                file_path = resolve_model_write_path(
+                    str(file_path), resolution_base=base, scope_base=base)
+        except Exception as exc:
+            return None, _error_json(f"output_path blocked by model workspace policy: {exc}")
         from agent.file_safety import is_write_approval_required, is_write_denied
         if is_write_denied(str(file_path)) or is_write_approval_required(str(file_path)):
             return None, _error_json(
@@ -327,6 +340,26 @@ def _media_tag(paths: List[str], voice_compatible: bool) -> str:
     """``MEDIA:<path>`` lines; the ``[[audio_as_voice]]`` marker asks the platform for a voice bubble."""
     media_tag = "\n".join(f"MEDIA:{path}" for path in paths)
     return f"[[audio_as_voice]]\n{media_tag}" if voice_compatible else media_tag
+
+
+def _publish_tts_paths_for_model(paths: List[str], task_id: Optional[str]) -> List[str]:
+    from agent.model_file_policy import (
+        make_internal_artifact_source, publish_internal_artifact_for_model,
+        resolve_model_read_path,
+    )
+    published: List[str] = []
+    for path in paths:
+        try:
+            published.append(str(resolve_model_read_path(path)))
+            continue
+        except Exception:
+            pass
+        trusted = make_internal_artifact_source(
+            path, source_class="tts-generated", source_id=Path(path).name)
+        staged = publish_internal_artifact_for_model(
+            trusted, namespace="tts", task_id=task_id, session_id=task_id)
+        published.append(str(staged.path))
+    return published
 
 
 def _tool_failure(prefix: str, provider: str, exc: BaseException) -> str:
@@ -421,7 +454,8 @@ def _synthesize_chunks(chunks: List[str], base_path: Path, generated_artifacts: 
 
 def text_to_speech_tool(
     text: str, output_path: Optional[str] = None, speed: Optional[float] = None,
-    instructions: Optional[str] = None, provider: Optional[str] = None) -> str:
+    instructions: Optional[str] = None, provider: Optional[str] = None,
+    task_id: Optional[str] = None) -> str:
     """Convert text to speech with long-form chunking; returns the JSON result envelope.
 
     Text is normalized, split into provider-safe chunks (never silently truncated), synthesized
@@ -448,7 +482,7 @@ def text_to_speech_tool(
     platform, want_opus = _session_platform()
     delivery_profile = _resolve_audio_delivery_profile(platform, tts_config)
     base_path, error = _resolve_output_base(
-        output_path, provider, command_provider_config, want_opus)
+        output_path, provider, command_provider_config, want_opus, task_id=task_id)
     if error:
         return error
     generated_artifacts: set[str] = set()
@@ -464,9 +498,10 @@ def text_to_speech_tool(
             encoded_paths, str(delivery_base), delivery_profile, voice_compatible=voice_compatible)
         for path in final_paths:
             logger.info("TTS audio saved: %s (%s bytes, provider: %s)", path, f"{os.path.getsize(path):,}", provider)
+        model_paths = _publish_tts_paths_for_model(final_paths, task_id)
         return json.dumps({
-            "success": True, "file_path": final_paths[0], "file_paths": final_paths,
-            "media_tag": _media_tag(final_paths, voice_compatible),
+            "success": True, "file_path": model_paths[0], "file_paths": model_paths,
+            "media_tag": _media_tag(model_paths, voice_compatible),
             "provider": chunk_results[0].get("provider", provider), "voice_compatible": voice_compatible,
             "chunk_count": len(chunks), "delivery_file_count": len(final_paths),
             "combined_chunks": bool(combined_chunks),
@@ -650,7 +685,7 @@ registry.register(
     toolset="tts",
     schema=TTS_SCHEMA,
     handler=lambda args, **kw: text_to_speech_tool(
-        text=args.get("text", ""),
+        text=args.get("text", ""), task_id=kw.get("task_id"),
         **{k: args.get(k) for k in ("output_path", "speed", "instructions", "provider")}),
     check_fn=check_tts_requirements,
     emoji="🔊",

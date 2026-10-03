@@ -14,7 +14,10 @@ import threading
 import time
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from tools.delegate_tool import (
     DELEGATE_BLOCKED_TOOLS,
@@ -28,6 +31,13 @@ from tools.delegate_tool import (
     _resolve_delegation_credentials,
 )
 from hermes_state import SessionDB
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_checkout_bootstrap(monkeypatch):
+    # Lazy imports of run_agent must stay inside the test environment rather than
+    # probing the production sealed-install manifest beside the live checkout.
+    monkeypatch.setattr("pm.environments.payload_venv", lambda *_a, **_k: None)
 
 
 def _make_mock_parent(depth=0):
@@ -322,7 +332,7 @@ class TestDelegateTask(unittest.TestCase):
                 self.assertIsInstance(child_db, SessionDB)
                 self.assertIsNot(child_db, parent_db)
                 self.assertEqual(
-                    str(child_db.db_path), str(parent_db.db_path)
+                    Path(child_db.db_path).resolve(), Path(parent_db.db_path).resolve()
                 )
             finally:
                 if child_db is not None:

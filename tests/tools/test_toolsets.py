@@ -59,6 +59,12 @@ class TestGetToolset:
 
 class TestResolveToolset:
 
+    def test_ordinary_core_excludes_computer_use_but_explicit_toolset_remains(self):
+        ordinary = set(resolve_toolset("hermes-cli", include_registry=False))
+        assert "computer_use" not in ordinary
+        explicit = set(resolve_toolset("computer_use", include_registry=False))
+        assert explicit == {"computer_use"}
+
     def test_cycle_detection(self):
         # Create a cycle: A includes B, B includes A
         TOOLSETS["_cycle_a"] = {"description": "test", "tools": ["t1"], "includes": ["_cycle_b"]}

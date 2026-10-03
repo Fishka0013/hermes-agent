@@ -691,6 +691,9 @@ def _post_redirect_block(nav_session_key: str, url: str, final_url: str, auto_lo
     ``browser.allow_private_urls``."""
     if not final_url or final_url == url:
         return None
+    if _browser_local_file_error(final_url) is not None:
+        _session._run_browser_command(nav_session_key, "open", ["about:blank"], timeout=10)
+        return json.dumps(_err("Blocked: redirect landed on a local-file target (file:)."))
     if _is_always_blocked_url(final_url):
         what = "a cloud metadata endpoint"
     elif (
@@ -735,10 +738,25 @@ def _attach_auto_snapshot(response: Dict[str, Any], nav_session_key: str) -> Non
         logger.debug("Auto-snapshot after navigate failed: %s", e)
 
 
+def _browser_local_file_error(url: object) -> Optional[Dict[str, Any]]:
+    """Reject local-file navigation before any browser/controller routing."""
+    from urllib.parse import unquote, urlparse
+
+    try:
+        decoded = unquote(str(url or "").strip())
+        if (urlparse(decoded).scheme or "").lower() == "file" or decoded.lower().startswith("file:"):
+            return _err("Blocked: browser local-file navigation (file:) is disabled by the ordinary-model filesystem policy.")
+    except Exception:
+        return _err("Blocked: browser navigation target could not be validated safely.")
+    return None
+
+
 def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     """Navigate to ``url``; JSON with title, compact snapshot and, on first nav, stealth features.
     Hybrid routing decides BEFORE the safety checks whether this URL goes to a local sidecar
     (the cloud provider never sees it then, so the private-address checks are relaxed)."""
+    if (local_file_error := _browser_local_file_error(url)) is not None:
+        return json.dumps(local_file_error)
     url, safety_error = _secret_url_error_normalized(url)
     if safety_error is not None:
         return json.dumps(safety_error)
@@ -1269,8 +1287,9 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
             return _vision._native_vision_result(screenshot_path, question, annotate, result, _lp_fallback_warning)
 
         analysis = _vision._analyze_screenshot_with_aux_llm(screenshot_path, question)
+        model_screenshot_path = _vision._publish_screenshot_for_model(screenshot_path)
         response_data = {"success": True, "analysis": analysis or "Vision analysis returned no content.",
-                         "screenshot_path": str(screenshot_path)}
+                         "screenshot_path": str(model_screenshot_path)}
         _lp._copy_fallback_warning(response_data, result)
         if annotate and result.get("data", {}).get("annotations"):
             response_data["annotations"] = result["data"]["annotations"]
@@ -1281,8 +1300,12 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
         logger.warning("browser_vision failed: %s", e, exc_info=True)
         error_info = _err(f"Error during vision analysis: {str(e)}")
         if screenshot_path.exists():
-            error_info["screenshot_path"] = str(screenshot_path)
-            error_info["note"] = "Screenshot was captured but vision analysis failed. You can still share it via MEDIA:<path>."
+            try:
+                model_screenshot_path = _vision._publish_screenshot_for_model(screenshot_path)
+                error_info["screenshot_path"] = str(model_screenshot_path)
+                error_info["note"] = "Screenshot was captured but vision analysis failed. You can still share it via MEDIA:<path>."
+            except Exception as publish_exc:
+                logger.warning("Could not publish failed-analysis screenshot safely: %s", publish_exc)
         _lp._copy_fallback_warning(error_info, result)
         return _dumps(error_info)
 
@@ -1340,6 +1363,9 @@ def _routed_check_fn(name: str):
 
 def _routed_handler(name: str, fallback):
     def handler(args, **kw):
+        if name == "browser_navigate":
+            if (local_file_error := _browser_local_file_error(args.get("url", ""))) is not None:
+                return _dumps(local_file_error)
         return routed_browser_handler(name, args, fallback=lambda: fallback(args, kw),
                                       task_id=kw.get("task_id"), session_id=kw.get("session_id"))
     return handler

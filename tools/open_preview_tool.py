@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open a URL, dev server, or file in the Hermes desktop GUI's preview pane.
+"""Open an HTTP(S) URL or authorized dev server in the Hermes desktop GUI's preview pane.
 
 Registration lives in the `desktop_preview` tool (``tools.preview_tool``); this module keeps
 the normalizer + open action. Emits ``preview.open`` via ``desktop_ui``: the renderer opens
@@ -7,6 +7,7 @@ the pane for the window that asked and never steals focus for a background sessi
 """
 
 import re
+from urllib.parse import unquote, urlparse
 
 from tools import desktop_ui
 from tools.registry import tool_error
@@ -23,18 +24,28 @@ def _normalize_target(raw: str) -> str:
         return v
     if re.match(r"^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(/|$)", v, re.I):
         return "http://" + v
+    # A bare local filename such as index.html must not be mistaken for a domain.
+    if re.match(r"^[^/\\]+\.(?:html?|md|txt|pdf|csv|json|ya?ml|toml|xml|js|ts|css|docx?|xlsx?|pptx?)$", v, re.I):
+        return v
     if re.match(r"^[\w.-]+\.[a-z]{2,}(:\d+)?(/.*)?$", v, re.I):
         return "https://" + v
     return v
 
 
 def open_preview_tool(url: str, label: str = "") -> str:
-    """Ask the desktop GUI to show ``url`` in the preview pane beside the chat."""
+    """Ask the desktop GUI to show an HTTP(S) target in the preview pane."""
     target = _normalize_target(url or "")
     if not target:
+        return tool_error("url is required — use an https:// URL or an authorized localhost dev server.")
+    try:
+        decoded = unquote(target)
+        scheme = (urlparse(decoded).scheme or "").lower()
+    except Exception:
+        scheme = ""
+    if scheme not in {"http", "https"}:
         return tool_error(
-            "url is required — a web URL (https://…), a localhost dev server, or a "
-            "file path to show in the preview pane.")
+            "Local file/path preview is disabled for ordinary model tools. "
+            "Use an HTTP(S) target; localhost/dev-server access requires its own task authorization.")
     label = (label or "").strip()
     return desktop_ui.emit_or_error(
         "preview.open",
@@ -54,11 +65,10 @@ OPEN_PREVIEW_SCHEMA = {
     "name": "open_preview",
     "description": (
         "Open something in the preview pane beside the chat in the Hermes desktop "
-        "app. Use this when the user asks to see a page, dev server, or file in the "
-        "preview pane — e.g. \"open cnn.com in the preview pane\" or \"preview "
-        "localhost:3000\". Accepts a web URL (a bare domain like www.cnn.com is fine), "
-        "a localhost dev-server URL, or a file path (HTML renders live; other files "
-        "show their contents). The pane opens for the current window only. To close "
+        "app. Use this when the user asks to see a web page or an authorized dev server "
+        "in the preview pane — e.g. \"open cnn.com in the preview pane\" or \"preview "
+        "localhost:3000\". Accepts HTTP(S) targets; direct local file/path preview is "
+        "disabled for ordinary model tools. The pane opens for the current window only. To close "
         "the pane or a tab, use close_preview."
     ),
     "parameters": {
@@ -68,7 +78,7 @@ OPEN_PREVIEW_SCHEMA = {
                 "type": "string",
                 "description": (
                     "What to preview: a web URL (https://… or a bare domain), a "
-                    "localhost URL (localhost:3000), or a file path."
+                    "localhost URL (localhost:3000). Local file paths are not accepted."
                 ),
             },
             "label": {

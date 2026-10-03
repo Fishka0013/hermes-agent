@@ -37,6 +37,8 @@ class NotAnImage(ImageResolutionError): ...
 @dataclass
 class ResolveContext:
     task_id: Optional[str] = None
+    resolution_base: Optional[str] = None
+    scope_base: Optional[str] = None
 
 
 @dataclass
@@ -164,25 +166,45 @@ def _media_cache_roots() -> list:
     return [home / sub for sub in _MEDIA_CACHE_SUBDIRS]
 
 
-def _permitted_host_read_target(p: Path, ctx: ResolveContext) -> Optional[Path]:
-    """Host path to read, or ``None`` (caller exec-reads inside the sandbox instead).
+def _local_workspace_root() -> Path:
+    """Configured local AI workspace root used to confine direct host media reads."""
+    from tools.terminal_scope import terminal_env
 
-    Local backend: any path. Non-local: only paths inside a media cache root (a
-    container-visible cache path is first translated back to its host mount).
+    raw = terminal_env("TERMINAL_CWD", "").strip()
+    if not raw or raw in {".", "auto", "cwd"}:
+        raw = os.getcwd()
+    return Path(os.path.expanduser(raw)).resolve()
+
+
+def _permitted_host_read_target(p: Path, ctx: ResolveContext) -> Optional[Path]:
+    """Resolve a model-origin media path through the central workspace policy.
+
+    Runtime caches are INTERNAL_ARTIFACT storage, not model-readable roots.
     """
-    if _is_local_terminal_backend():
-        try:
-            return p.resolve()
-        except Exception:  # noqa: BLE001 — unresolved path: let is_file() fail downstream
-            return p
-    from tools.credential_files import from_agent_visible_cache_path
+    from agent.model_file_policy import (
+        ModelFilePolicyError, resolve_model_read_path, validate_resolution_base)
+
     try:
-        real = Path(from_agent_visible_cache_path(str(p))).resolve()
-    except Exception:  # noqa: BLE001 — cannot resolve -> not a safe host read
-        return None
-    if any(real.is_relative_to(root.resolve()) for root in _media_cache_roots()):
-        return real
-    return None
+        base = ctx.resolution_base
+        scope = ctx.scope_base
+        # Absolute model paths are constrained by MODEL_WORKSPACE_ROOT only.
+        # Task/project base is a relative-resolution scope, never a second
+        # authority requirement for already-absolute in-root paths.
+        if not p.is_absolute():
+            if base is None and ctx.task_id:
+                from tools.file_tools_paths import _resolve_base_dir
+                base = str(_resolve_base_dir(ctx.task_id, container_paths=False))
+            if base is not None:
+                base = str(validate_resolution_base(base))
+            if scope is not None:
+                scope = str(validate_resolution_base(scope))
+            scope = scope or base
+        else:
+            base = scope = None
+        return resolve_model_read_path(
+            str(p), resolution_base=base, scope_base=scope)
+    except ModelFilePolicyError as exc:
+        raise SourceUnsafe(str(exc), src=str(p), origin="file") from exc
 
 
 def _get_active_env(task_id: Optional[str]):

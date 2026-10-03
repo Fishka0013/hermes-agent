@@ -35,7 +35,8 @@ _HERMES_CORE_TOOLS = [
     "kanban_comment", "kanban_create", "kanban_link",
     "kanban_unblock",
     "kanban_attach", "kanban_attach_url", "kanban_attachments",
-    "computer_use",
+    # computer_use is privileged/explicit-only. It must never ride the ordinary
+    # default/core platform bundles merely because the driver becomes available.
     # Service-gated connector account status and authorization links.
     "manage_connections",
 ]

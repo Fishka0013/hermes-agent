@@ -1287,9 +1287,39 @@ SEARCH_FILES_SCHEMA = {
 }
 
 
+def _model_task_base(task_id: str) -> Path:
+    """Approved host task/project base for model-relative file paths."""
+    from agent.model_file_policy import validate_resolution_base
+    base = _resolve_base_dir(task_id, container_paths=False)
+    return validate_resolution_base(str(base))
+
+
+def _model_read_target(path: str, task_id: str, *, allow_directory: bool = False) -> str:
+    from agent.model_file_policy import resolve_model_read_path
+    expanded = _expand_tilde(path)
+    if Path(expanded).is_absolute():
+        return str(resolve_model_read_path(path, allow_directory=allow_directory))
+    base = _model_task_base(task_id)
+    return str(resolve_model_read_path(
+        path, allow_directory=allow_directory, resolution_base=base, scope_base=base))
+
+
+def _model_write_target(path: str, task_id: str) -> str:
+    from agent.model_file_policy import resolve_model_write_path
+    expanded = _expand_tilde(path)
+    if Path(expanded).is_absolute():
+        return str(resolve_model_write_path(path))
+    base = _model_task_base(task_id)
+    return str(resolve_model_write_path(path, resolution_base=base, scope_base=base))
+
+
 def _handle_read_file(args, **kw):
     tid = kw.get("task_id") or "default"
-    return read_file_tool(path=args.get("path", ""), offset=args.get("offset", 1), limit=args.get("limit", DEFAULT_READ_LIMIT), task_id=tid)
+    try:
+        path = _model_read_target(args.get("path", ""), tid)
+    except Exception as exc:
+        return tool_error(str(exc))
+    return read_file_tool(path=path, offset=args.get("offset", 1), limit=args.get("limit", DEFAULT_READ_LIMIT), task_id=tid)
 
 
 def _handle_write_file(args, **kw):
@@ -1312,19 +1342,49 @@ def _handle_write_file(args, **kw):
             f"write_file: 'content' must be a string, got "
             f"{type(args['content']).__name__}."
         )
+    try:
+        resolved_path = _model_write_target(args["path"], tid)
+    except Exception as exc:
+        return tool_error(str(exc))
     return write_file_tool(
-        path=args["path"], content=args["content"], task_id=tid,
+        path=resolved_path, content=args["content"], task_id=tid,
         cross_profile=bool(args.get("cross_profile", False)),
         session_id=kw.get("session_id"),
     )
 
 
+def _resolve_model_v4a_patch(patch: str, task_id: str) -> str:
+    """Resolve every V4A path through the model policy before patch parsing/I/O."""
+
+    def _single(match):
+        target = _model_write_target(match.group(3).strip(), task_id)
+        return f"{match.group(1)}{target}"
+
+    def _move(match):
+        src = _model_write_target(match.group(2).strip(), task_id)
+        dst = _model_write_target(match.group(3).strip(), task_id)
+        return f"{match.group(1)}{src} -> {dst}"
+
+    patch = _V4A_SINGLE_HEADER_RE.sub(_single, patch)
+    return _V4A_MOVE_HEADER_RE.sub(_move, patch)
+
+
 def _handle_patch(args, **kw):
     tid = kw.get("task_id") or "default"
+    mode = args.get("mode", "replace")
+    path = args.get("path")
+    patch_content = args.get("patch")
+    try:
+        if mode == "replace" and path:
+            path = _model_write_target(path, tid)
+        elif mode == "patch" and isinstance(patch_content, str):
+            patch_content = _resolve_model_v4a_patch(patch_content, tid)
+    except Exception as exc:
+        return tool_error(str(exc))
     return patch_tool(
-        mode=args.get("mode", "replace"), path=args.get("path"),
+        mode=mode, path=path,
         old_string=args.get("old_string"), new_string=args.get("new_string"),
-        replace_all=args.get("replace_all", False), patch=args.get("patch"), task_id=tid,
+        replace_all=args.get("replace_all", False), patch=patch_content, task_id=tid,
         cross_profile=bool(args.get("cross_profile", False)),
         session_id=kw.get("session_id"),
     )
@@ -1340,6 +1400,10 @@ def _handle_search_files(args, **kw):
     path = args.get("path", ".")
     if path is None or (isinstance(path, str) and not path.strip()):
         path = "."
+    try:
+        path = _model_read_target(path, tid, allow_directory=True)
+    except Exception as exc:
+        return tool_error(str(exc))
     return search_tool(
         pattern=args.get("pattern", ""), target=target, path=path,
         file_glob=args.get("file_glob"), limit=args.get("limit", 50), offset=args.get("offset", 0),

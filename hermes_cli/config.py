@@ -128,6 +128,7 @@ _ENV_VAR_NAME_DENYLIST: frozenset[str] = frozenset({
     "HERMES_COPILOT_ACP_COMMAND", "HERMES_COPILOT_ACP_ARGS",
     # Security policy / approval-routing context — set via their dedicated controls only.
     "HERMES_YOLO_MODE", "HERMES_ACCEPT_HOOKS", "HERMES_REDACT_SECRETS",
+    "MODEL_WORKSPACE_ROOT", "HERMES_NATIVE_FILE_READ",
     "HERMES_INTERACTIVE", "HERMES_EXEC_ASK", "HERMES_GATEWAY_SESSION",
     "HERMES_CRON_SESSION", "HERMES_SINGLE_QUERY_SESSION",
     "HERMES_SESSION_KEY", "HERMES_SESSION_PLATFORM"})
@@ -2070,6 +2071,24 @@ def load_config_readonly() -> Dict[str, Any]:
     **Mutating the returned dict (or any nested structure) corrupts the in-process cache for
     every subsequent caller** — only for code paths that never write to the result."""
     return _load_config_impl(want_deepcopy=False)
+
+
+_MODEL_FILE_SECURITY_KEYS = (
+    "model_workspace_root",
+    "model_staging_max_file_bytes",
+    "model_staging_session_quota_bytes",
+    "model_staging_profile_quota_bytes",
+    "model_staging_ttl_seconds",
+)
+
+
+def get_model_file_security_config() -> Dict[str, Any]:
+    """Profile-scoped model-file policy settings; never derived from terminal.cwd."""
+    cfg = load_config_readonly()
+    sec = cfg.get("security") if isinstance(cfg, dict) else None
+    if not isinstance(sec, dict):
+        return {}
+    return {key: sec.get(key) for key in _MODEL_FILE_SECURITY_KEYS}
 
 
 def _ensure_dict(parent: Dict[str, Any], key: str) -> Dict[str, Any]:

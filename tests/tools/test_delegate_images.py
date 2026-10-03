@@ -5,6 +5,8 @@ vision-capable child as native ``image_url`` content parts on its goal turn; non
 import base64
 from unittest.mock import patch
 
+import pytest
+
 from tools.delegate_tool import DELEGATE_TASK_SCHEMA, _MAX_TASK_IMAGES, _build_child_goal_message, _normalize_task_images
 from tools.delegate_tool_child_run import _ChildRun
 
@@ -24,14 +26,33 @@ def _png(tmp_path, name="shot.png"):
     return str(p)
 
 
-def test_normalize_task_images_shapes_and_limit():
+@pytest.fixture(autouse=True)
+def _model_workspace(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(tmp_path),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
+    monkeypatch.setattr(
+        "tools.file_tools_paths._resolve_base_dir",
+        lambda *_a, **_k: tmp_path,
+    )
+
+
+def test_normalize_task_images_shapes_and_limit(tmp_path):
+    local = _png(tmp_path, "a.png")
     assert _normalize_task_images({"goal": "g"}, 0) == (None, None)
     assert _normalize_task_images({"images": []}, 0) == (None, None)
-    assert _normalize_task_images({"images": "/tmp/a.png"}, 0) == (["/tmp/a.png"], None)
-    assert _normalize_task_images({"images": [" /tmp/a.png ", "https://x.test/b.jpg"]}, 0) == (
-        ["/tmp/a.png", "https://x.test/b.jpg"], None,
+    assert _normalize_task_images({"images": local}, 0) == ([local], None)
+    assert _normalize_task_images({"images": [f" {local} ", "https://x.test/b.jpg"]}, 0) == (
+        [local, "https://x.test/b.jpg"], None,
     )
-    for bad in ({"path": "x"}, ["/tmp/a.png", 42], ["  "]):
+    for bad in ({"path": "x"}, [local, 42], ["  "]):
         cleaned, err = _normalize_task_images({"images": bad}, 2)
         assert cleaned is None and "Task 2" in err
     cleaned, err = _normalize_task_images({"images": [f"/tmp/{i}.png" for i in range(_MAX_TASK_IMAGES + 1)]}, 1)
