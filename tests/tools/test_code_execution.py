@@ -83,9 +83,8 @@ def _mock_handle_function_call(function_name, function_args, task_id=None, user_
 
 
 class TestSandboxRequirements(unittest.TestCase):
-    def test_available_on_posix(self):
-        if sys.platform != "win32":
-            self.assertTrue(check_sandbox_requirements())
+    def test_unfenced_kernel_is_not_an_ordinary_model_capability(self):
+        self.assertFalse(check_sandbox_requirements())
 
 
 

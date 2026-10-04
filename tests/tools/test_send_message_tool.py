@@ -364,6 +364,8 @@ class TestSendMessageTool:
         still sent; the payload names the drop and the CLI exit code follows it."""
         from hermes_cli.send_cmd import _emit_result
 
+        from tests.sec3_workspace_fixtures import configure_model_workspace
+        configure_model_workspace(monkeypatch, tmp_path)
         monkeypatch.setenv("HERMES_MEDIA_DELIVERY_STRICT", "0")
         config, telegram_cfg = _make_config()
         report = tmp_path / "report.pdf"

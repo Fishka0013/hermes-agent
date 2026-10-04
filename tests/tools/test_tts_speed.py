@@ -283,3 +283,13 @@ class TestToolLevelSpeed:
         config_passed = mock_gen.call_args[0][2]
         assert config_passed.get("speed") == 1.5  # original config preserved
         assert original_config.get("speed") == 1.5  # original not mutated
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

@@ -74,3 +74,13 @@ def test_partial_read_cannot_refresh_a_changed_full_baseline(tmp_path):
         assert path.read_text(encoding="utf-8").startswith("x" * (get_max_line_length() + 10))
     finally:
         clear_file_ops_cache("clamped")
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

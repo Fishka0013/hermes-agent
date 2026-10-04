@@ -1,9 +1,9 @@
 """Tests for tools/image_source.py — the unified vision image-source resolver.
 
 Covers the delivery contract (data:/http/file/local/container source handling,
-size cap, magic-byte sniff) AND the terminal-backend confinement security model
-(GHSA-gpxw-6wxv-w3qq): under a non-local backend, host reads are confined to the
-media caches and every other path is read inside the sandbox via exec-read.
+size cap, magic-byte sniff) AND the model workspace confinement security model:
+cache paths require trusted publication, and terminal/backend scope never widens
+the model filesystem perimeter.
 """
 
 import base64
@@ -31,6 +31,26 @@ def _reload(monkeypatch, hermes_home: Path):
     import tools.image_source as isrc
     importlib.reload(isrc)
     return isrc
+
+
+def _set_model_root(monkeypatch, root: Path) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(root),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
+    return root
+
+
+@pytest.fixture(autouse=True)
+def _model_workspace_root(tmp_path, monkeypatch):
+    _set_model_root(monkeypatch, tmp_path)
 
 
 @pytest.fixture(autouse=True)
@@ -67,6 +87,7 @@ class TestDataUrl:
         """A PNG-shaped but undecodable payload never becomes a resolved image."""
         isrc = _reload(monkeypatch, tmp_path / "hermes")
         monkeypatch.setenv("TERMINAL_ENV", "local")
+        monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
         img = tmp_path / "corrupt.png"
         img.write_bytes(CORRUPT_PNG)
         with pytest.raises(isrc.NotAnImage):
@@ -75,120 +96,131 @@ class TestDataUrl:
 
 class TestLocalBackend:
     @pytest.mark.asyncio
-    async def test_local_backend_reads_any_host_path(self, tmp_path, monkeypatch):
+    async def test_local_backend_reads_configured_workspace(self, tmp_path, monkeypatch):
         isrc = _reload(monkeypatch, tmp_path / "hermes")
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
         monkeypatch.setenv("TERMINAL_ENV", "local")
-        img = tmp_path / "outside" / "pic.png"
-        img.parent.mkdir(parents=True)
+        monkeypatch.setenv("TERMINAL_CWD", str(workspace))
+        img = workspace / "pic.png"
         img.write_bytes(PNG)
         res = await isrc.resolve_image_source(str(img), isrc.ResolveContext())
         assert res.data == PNG
         assert res.origin == "file"
 
+    @pytest.mark.asyncio
+    async def test_local_backend_blocks_path_outside_workspace(self, tmp_path, monkeypatch):
+        isrc = _reload(monkeypatch, tmp_path / "hermes")
+        workspace = _set_model_root(monkeypatch, tmp_path / "workspace")
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+        monkeypatch.setenv("TERMINAL_CWD", str(workspace))
+        img = tmp_path / "outside.png"
+        img.write_bytes(PNG)
+        with pytest.raises(isrc.SourceUnsafe, match="outside MODEL_WORKSPACE_ROOT"):
+            await isrc.resolve_image_source(str(img), isrc.ResolveContext())
 
     @pytest.mark.asyncio
     async def test_bare_relative_path_resolves(self, tmp_path, monkeypatch):
-        """A cwd-relative bare filename ('pic.png') is a valid local source —
-        main accepted it; the resolver must not regress it (PR review)."""
+        """A bare filename resolves relative to the configured local workspace."""
         isrc = _reload(monkeypatch, tmp_path / "hermes")
         monkeypatch.setenv("TERMINAL_ENV", "local")
+        monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
         img = tmp_path / "pic.png"
         img.write_bytes(PNG)
-        monkeypatch.chdir(tmp_path)
         res = await isrc.resolve_image_source("pic.png", isrc.ResolveContext())
         assert res.data == PNG
         assert res.origin == "file"
 
 
 class TestNonLocalBackendConfinement:
-    """The security model: under a sandbox backend, host reads are confined to
-    the media caches; every other path is read inside the sandbox."""
+    """Backend choice does not authorize raw cache or outside-workspace files."""
 
     @pytest.mark.asyncio
-    async def test_media_cache_path_host_read(self, tmp_path, monkeypatch):
+    async def test_media_cache_path_requires_trusted_staging(self, tmp_path, monkeypatch):
         home = tmp_path / "hermes"
+        workspace = _set_model_root(monkeypatch, tmp_path / "workspace")
         isrc = _reload(monkeypatch, home)
         monkeypatch.setenv("TERMINAL_ENV", "docker")
         cached = home / "cache" / "images" / "inbound.png"
         cached.parent.mkdir(parents=True)
         cached.write_bytes(PNG)
-        # No sandbox env needed — a cache path is host-read directly.
-        res = await isrc.resolve_image_source(str(cached), isrc.ResolveContext())
+
+        # A raw cache path is not MODEL_PATH authority.
+        with pytest.raises(isrc.SourceUnsafe):
+            await isrc.resolve_image_source(str(cached), isrc.ResolveContext())
+
+        from agent.model_file_policy import (
+            make_internal_artifact_source, publish_internal_artifact_for_model)
+        staged = publish_internal_artifact_for_model(
+            make_internal_artifact_source(cached, source_class="test-inbound", source_id="1"),
+            namespace="inbound", session_id="test")
+        assert staged.path.is_relative_to(workspace)
+        res = await isrc.resolve_image_source(str(staged.path), isrc.ResolveContext())
         assert res.data == PNG
         assert res.origin == "file"
 
     @pytest.mark.asyncio
-    async def test_desktop_upload_images_dir_host_read(self, tmp_path, monkeypatch):
-        """Desktop/clipboard uploads under ``HERMES_HOME/images`` are host-read.
-
-        Regression for #69575: uploads land in the flat top-level ``images/``
-        dir (not ``cache/images``). Under a sandbox backend the vision resolver
-        must permit reading them host-side — otherwise it falls through to the
-        task-id-less sandbox reader and fails with "not reachable inside the
-        sandbox".
-        """
+    async def test_desktop_upload_requires_trusted_staging(self, tmp_path, monkeypatch):
         home = tmp_path / "hermes"
+        workspace = _set_model_root(monkeypatch, tmp_path / "workspace")
         isrc = _reload(monkeypatch, home)
         monkeypatch.setenv("TERMINAL_ENV", "docker")
         upload = home / "images" / "upload_20260722_181019_1.png"
         upload.parent.mkdir(parents=True)
         upload.write_bytes(PNG)
-        # No sandbox env: an uploads path must be host-read directly, not routed
-        # to the in-sandbox exec-read.
-        res = await isrc.resolve_image_source(str(upload), isrc.ResolveContext())
+
+        with pytest.raises(isrc.SourceUnsafe):
+            await isrc.resolve_image_source(str(upload), isrc.ResolveContext())
+
+        from agent.model_file_policy import (
+            make_internal_artifact_source, publish_internal_artifact_for_model)
+        staged = publish_internal_artifact_for_model(
+            make_internal_artifact_source(upload, source_class="desktop-upload", source_id="1"),
+            namespace="inbound", session_id="desktop")
+        assert staged.path.is_relative_to(workspace)
+        res = await isrc.resolve_image_source(str(staged.path), isrc.ResolveContext())
         assert res.data == PNG
-        assert res.origin == "file"
 
     @pytest.mark.asyncio
-    async def test_host_secret_outside_cache_routes_to_sandbox_not_host(self, tmp_path, monkeypatch):
-        """A non-cache host path (e.g. /etc/passwd) must NOT be host-read — it
-        routes to the in-sandbox exec-read, which reads the CONTAINER's file."""
+    async def test_model_path_outside_root_blocks_before_sandbox_exec(self, tmp_path, monkeypatch):
         home = tmp_path / "hermes"
+        _set_model_root(monkeypatch, tmp_path / "workspace")
         isrc = _reload(monkeypatch, home)
         monkeypatch.setenv("TERMINAL_ENV", "docker")
-
-        # A real host file outside the caches, holding a "secret".
         secret = tmp_path / "id_rsa"
         secret.write_bytes(b"HOST-PRIVATE-KEY-DO-NOT-LEAK")
-
-        # Fake sandbox env: its exec-read returns a *different* (container) image,
-        # proving we read the container filesystem, not the host secret.
-        container_png_b64 = base64.b64encode(PNG).decode()
-        calls = {}
+        calls = {"n": 0}
 
         def fake_execute(cmd, **kw):
-            calls["cmd"] = cmd
-            return {"returncode": 0, "output": container_png_b64}
+            calls["n"] += 1
+            return {"returncode": 0, "output": base64.b64encode(PNG).decode()}
 
         with patch("tools.image_source._get_active_env",
                    return_value=SimpleNamespace(execute=fake_execute)):
-            res = await isrc.resolve_image_source(str(secret), isrc.ResolveContext(task_id="t1"))
-
-        # Read came from the sandbox exec-read, returning the container image —
-        # the host secret bytes never appear.
-        assert res.origin == "container"
-        assert res.data == PNG
-        assert b"HOST-PRIVATE-KEY" not in res.data
-        assert "head -c" in calls["cmd"] and "< " in calls["cmd"]  # bounded, redirect-safe form
+            with pytest.raises(isrc.SourceUnsafe):
+                await isrc.resolve_image_source(str(secret), isrc.ResolveContext(task_id="t1"))
+        assert calls["n"] == 0
 
     @pytest.mark.asyncio
     async def test_non_cache_path_fails_closed_without_sandbox(self, tmp_path, monkeypatch):
         """No active sandbox env -> refuse rather than fall back to a host read."""
         home = tmp_path / "hermes"
+        _set_model_root(monkeypatch, tmp_path / "workspace")
         isrc = _reload(monkeypatch, home)
         monkeypatch.setenv("TERMINAL_ENV", "docker")
         secret = tmp_path / "id_rsa"
         secret.write_bytes(b"HOST-PRIVATE-KEY")
 
         with patch("tools.image_source._get_active_env", return_value=None):
-            with pytest.raises(isrc.SourceNotFound):
+            with pytest.raises(isrc.SourceUnsafe):
                 await isrc.resolve_image_source(str(secret), isrc.ResolveContext(task_id="t1"))
 
     @pytest.mark.asyncio
     async def test_symlink_in_cache_pointing_outside_is_not_host_read(self, tmp_path, monkeypatch):
         """A symlink planted inside a cache dir that points at a host secret must
-        not be host-read (resolve() escapes the cache) — it routes to sandbox."""
+        not be host-read or accepted as trusted runtime provenance."""
         home = tmp_path / "hermes"
+        _set_model_root(monkeypatch, tmp_path / "workspace")
         isrc = _reload(monkeypatch, home)
         monkeypatch.setenv("TERMINAL_ENV", "docker")
         secret = tmp_path / "outside" / "id_rsa"
@@ -202,10 +234,15 @@ class TestNonLocalBackendConfinement:
         except (OSError, NotImplementedError):
             pytest.skip("symlinks unsupported")
 
-        # Fails closed (no sandbox) rather than host-reading the symlink target.
+        # Raw cache paths are never MODEL_PATH authority, and symlink escape is blocked.
         with patch("tools.image_source._get_active_env", return_value=None):
-            with pytest.raises(isrc.SourceNotFound):
+            with pytest.raises(isrc.SourceUnsafe):
                 await isrc.resolve_image_source(str(link), isrc.ResolveContext(task_id="t1"))
+        from agent.model_file_policy import make_internal_artifact_source, publish_internal_artifact_for_model
+        with pytest.raises(Exception):
+            publish_internal_artifact_for_model(
+                make_internal_artifact_source(link, source_class="test-cache-link"),
+                namespace="inbound", session_id="link")
 
 
 class TestExecReadSafety:
@@ -224,8 +261,9 @@ class TestExecReadSafety:
 
         with patch("tools.image_source._get_active_env",
                    return_value=SimpleNamespace(execute=fake_execute)):
-            await isrc.resolve_image_source(
-                "/workspace/-i-etc-shadow.png", isrc.ResolveContext(task_id="t1"))
+            src = "/workspace/-i-etc-shadow.png"
+            await isrc._resolve_container_fallback(
+                Path(src), isrc.ResolveContext(task_id="t1"), src)
         assert f"head -c {isrc._MAX_INGEST_BYTES + 1} < " in captured["cmd"]
         assert "'-i-etc-shadow.png'" in captured["cmd"] or "-i-etc-shadow.png" in captured["cmd"]
 
@@ -253,8 +291,9 @@ class TestExecReadSafety:
 
         with patch("tools.image_source._get_active_env",
                    return_value=SimpleNamespace(execute=fake_execute)):
-            res = await isrc.resolve_image_source(
-                "/workspace/cold.png", isrc.ResolveContext(task_id="t1"))
+            src = "/workspace/cold.png"
+            res = await isrc._resolve_container_fallback(
+                Path(src), isrc.ResolveContext(task_id="t1"), src)
         assert res.origin == "container"
         assert res.data == PNG
         assert calls["n"] == 2
@@ -276,8 +315,9 @@ class TestExecReadSafety:
         with patch("tools.image_source._get_active_env",
                    return_value=SimpleNamespace(execute=fake_execute)):
             with pytest.raises(isrc.SourceNotFound) as excinfo:
-                await isrc.resolve_image_source(
-                    "/workspace/missing.png", isrc.ResolveContext(task_id="t1"))
+                src = "/workspace/missing.png"
+                await isrc._resolve_container_fallback(
+                    Path(src), isrc.ResolveContext(task_id="t1"), src)
         # Diagnostic surfaced — the user can act on it.
         assert "No such file or directory" in str(excinfo.value)
 
@@ -292,6 +332,7 @@ class TestSvgNormalization:
         from tools import vision_tools_image_prep as vt
         isrc = _reload(monkeypatch, tmp_path / "hermes")
         monkeypatch.setenv("TERMINAL_ENV", "local")
+        monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
         svg = tmp_path / "art.svg"
         svg.write_bytes(b'<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>')
 
@@ -346,7 +387,9 @@ class TestLazySandboxBringUp:
         monkeypatch.setattr(tt, "ensure_task_env", fake_ensure)
         monkeypatch.setattr(isrc, "_get_active_env", fake_get_active)
 
-        res = await isrc.resolve_image_source("/tmp/test.png", isrc.ResolveContext(task_id="t1"))
+        src = "/tmp/test.png"
+        res = await isrc._resolve_container_fallback(
+            Path(src), isrc.ResolveContext(task_id="t1"), src)
 
         assert brought_up == ["t1"]  # bring-up was triggered before the read
         assert res.origin == "container"
@@ -366,7 +409,8 @@ class TestLazySandboxBringUp:
         monkeypatch.setattr(isrc, "_get_active_env", lambda *_a, **_k: None)
 
         with pytest.raises(isrc.SourceNotFound):
-            await isrc.resolve_image_source(str(secret), isrc.ResolveContext(task_id="t1"))
+            await isrc._resolve_container_fallback(
+                secret, isrc.ResolveContext(task_id="t1"), str(secret))
 
 
 # HEIF/HEIC/AVIF ISO-BMFF headers: 'ftyp' box at bytes 4-8, major brand at 8-12,
@@ -506,6 +550,7 @@ class TestHeicDetection:
         from tools import vision_tools_image_prep as vt
         isrc = _reload(monkeypatch, tmp_path / "hermes")
         monkeypatch.setenv("TERMINAL_ENV", "local")
+        monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
 
         heic = tmp_path / "photo.heic"
         # x265's default CPU-sized pool can exhaust CI threads and hang the encoder.

@@ -44,13 +44,14 @@ PREVIEW_SCHEMA = {
     "name": "desktop_preview",
     "description": (
         "Open, close, or read the preview pane beside the chat. open: show "
-        "a web URL (bare domains fine), a localhost dev server, or a file path "
-        "(HTML renders live) — opens for the current window only. close: dismiss "
+        "an HTTP(S) URL (bare domains fine) or an authorized localhost dev server "
+        "— opens for the current window only. Direct local file/path preview is "
+        "disabled. close: dismiss "
         "the whole pane, or one tab via url. read: what the pane currently shows "
         "— returns {kind, url, title, text, start, end, total_chars}; a Browser "
         "tab's text is the rendered page's visible text, paged with start/count "
-        "(char offsets); a file tab answers identity only (read the file with "
-        "read_file)."
+        "(char offsets). Local file/artifact tabs and unverified page URLs are "
+        "blocked; use read_file within MODEL_WORKSPACE_ROOT."
     ),
     "parameters": {
         "type": "object",

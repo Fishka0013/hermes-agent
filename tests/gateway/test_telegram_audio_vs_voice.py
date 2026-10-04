@@ -57,11 +57,15 @@ def _audio_event(path: str = "/tmp/song.mp3") -> MessageEvent:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_voice_message_still_transcribed():
+async def test_voice_message_still_transcribed(tmp_path, monkeypatch):
     """MessageType.VOICE must still be sent through _enrich_message_with_transcription."""
     runner = _make_runner(stt_enabled=True)
     source = SessionSource(platform=Platform.TELEGRAM, chat_id="1", chat_type="dm")
-    event = _voice_event("/tmp/voice.ogg")
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+    root = configure_model_workspace(monkeypatch, tmp_path, root=tmp_path / "workspace")
+    source_audio = tmp_path / "voice.ogg"
+    source_audio.write_bytes(b"voice fixture")
+    event = _voice_event(str(source_audio))
 
     with patch(
         "tools.transcription_tools.transcribe_audio",
@@ -73,7 +77,12 @@ async def test_voice_message_still_transcribed():
             history=[],
         )
 
-    mock_transcribe.assert_called_once_with("/tmp/voice.ogg", None, "gateway")
+    mock_transcribe.assert_called_once()
+    staged = mock_transcribe.call_args.args[0]
+    from pathlib import Path
+    assert Path(staged).is_relative_to(root)
+    assert Path(staged).read_bytes() == b"voice fixture"
+    assert mock_transcribe.call_args.args[1:] == (None, "gateway")
     # The transcript passes through as a plain quoted line — no "voice message"
     # meta-commentary in the LLM-visible prompt.
     assert "hello world" in result
@@ -85,11 +94,15 @@ async def test_voice_message_still_transcribed():
 
 
 @pytest.mark.asyncio
-async def test_audio_attachment_context_note_format():
+async def test_audio_attachment_context_note_format(tmp_path, monkeypatch):
     """Context note for audio file attachments should include the file path and guidance."""
     runner = _make_runner(stt_enabled=True)
     source = SessionSource(platform=Platform.TELEGRAM, chat_id="1", chat_type="dm")
-    event = _audio_event("/tmp/cache_12345_my_song.mp3")
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+    root = configure_model_workspace(monkeypatch, tmp_path, root=tmp_path / "workspace")
+    audio = tmp_path / "cache_12345_my_song.mp3"
+    audio.write_bytes(b"audio fixture")
+    event = _audio_event(str(audio))
 
     with patch(
         "tools.transcription_tools.transcribe_audio",
@@ -106,7 +119,13 @@ async def test_audio_attachment_context_note_format():
             )
 
     # STT must not run (transcribe_audio raises); the agent sees the file path.
-    assert "my_song.mp3" in result
+    from pathlib import Path
+    staged = Path(event.media_urls[0])
+    assert staged.name in result and staged.suffix == ".mp3"
+    assert staged.read_bytes() == b"audio fixture"
+    assert staged.with_name(staged.name + ".receipt.json").is_file()
+    assert str(root) in result
+    assert str(audio) not in result
 
 
 # ---------------------------------------------------------------------------
@@ -117,4 +136,3 @@ async def test_audio_attachment_context_note_format():
 # ---------------------------------------------------------------------------
 # 4. Telegram gateway: msg.audio → MessageType.AUDIO (not VOICE)
 # ---------------------------------------------------------------------------
-

@@ -96,6 +96,8 @@ def test_rpc_carries_authority_to_real_dispatch(child_env, monkeypatch, transpor
     from tools import terminal_tool
     from tools.code_execution_tool import _run_remote_per_call
 
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+    configure_model_workspace(monkeypatch, child_env)
     witness = child_env / "authority.txt"
 
     marker = contextvars.ContextVar("rpc-authority", default="missing")

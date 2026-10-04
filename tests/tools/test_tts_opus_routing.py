@@ -49,9 +49,12 @@ def test_edge_telegram_converts_to_opus_voice(tmp_path, monkeypatch):
     opus = tmp_path / "speech.ogg"
 
     def fake_convert(path: str) -> str:
-        assert path == str(out)
-        opus.write_bytes(b"ogg")
-        return str(opus)
+        private = Path(path)
+        assert private.parent.name.startswith(".hermes-tts-")
+        assert private.parent.parent == tmp_path and private.read_bytes() == b"mp3"
+        target = private.with_suffix(".ogg")
+        target.write_bytes(b"ogg")
+        return str(target)
 
     convert = Mock(side_effect=fake_convert)
 
@@ -67,7 +70,9 @@ def test_edge_telegram_converts_to_opus_voice(tmp_path, monkeypatch):
     assert result["file_path"] == str(opus)
     assert result["voice_compatible"] is True
     assert result["media_tag"] == f"[[audio_as_voice]]\nMEDIA:{opus}"
-    convert.assert_called_once_with(str(out))
+    convert.assert_called_once()
+    assert opus.read_bytes() == b"ogg"
+    assert not Path(convert.call_args.args[0]).parent.exists()
 
 
 def test_edge_matrix_converts_to_opus_voice(tmp_path, monkeypatch):
@@ -76,9 +81,12 @@ def test_edge_matrix_converts_to_opus_voice(tmp_path, monkeypatch):
     opus = tmp_path / "speech.ogg"
 
     def fake_convert(path: str) -> str:
-        assert path == str(out)
-        opus.write_bytes(b"ogg")
-        return str(opus)
+        private = Path(path)
+        assert private.parent.name.startswith(".hermes-tts-")
+        assert private.parent.parent == tmp_path and private.read_bytes() == b"mp3"
+        target = private.with_suffix(".ogg")
+        target.write_bytes(b"ogg")
+        return str(target)
 
     convert = Mock(side_effect=fake_convert)
 
@@ -94,4 +102,16 @@ def test_edge_matrix_converts_to_opus_voice(tmp_path, monkeypatch):
     assert result["file_path"] == str(opus)
     assert result["voice_compatible"] is True
     assert result["media_tag"] == f"[[audio_as_voice]]\nMEDIA:{opus}"
-    convert.assert_called_once_with(str(out))
+    convert.assert_called_once()
+    assert opus.read_bytes() == b"ogg"
+    assert not Path(convert.call_args.args[0]).parent.exists()
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

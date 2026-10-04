@@ -80,3 +80,13 @@ def test_read_file_excludes_phonetic_guides(tmp_path, monkeypatch, kind):
 def test_string_values_without_phonetics_are_preserved(tmp_path, storage, text, expected):
     path = _workbook(tmp_path / "control.xlsx", storage, text)
     assert extract_document_text(str(path)).splitlines()[1] == expected + "\tsentinel"
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

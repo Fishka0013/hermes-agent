@@ -165,7 +165,7 @@ Environment state persists: activate a virtualenv or export variables once per s
 Foreground (default): returns INSTANTLY when the command finishes, even with a high timeout — set timeout generously for long builds and fixed waits.
 Background: set background=true (returns a session_id) only for commands that must keep running independently after this tool call returns; add notify=true for bounded tasks, leave silent only for servers/daemons that never exit. Do not start sleep, timers, cooldowns, delays, or polling loops with background=true — to wait a fixed time, run the wait as a normal foreground command with a high enough timeout. After starting a server, verify readiness with a health check in a separate call (no blind sleep loops); manage with process(action="poll"/"wait").
 Working directory: use 'workdir' for per-command cwd; when a command changes the session cwd (cd, pushd), trust the result's "cwd" field instead of prefixing every command with 'cd'.
-PTY: pty=true + background=true for interactive CLIs (they hang without a terminal); drive them with process(action="write"/"submit"). Local backend only.
+Native PTY is unavailable for ordinary model execution; use foreground commands or noninteractive background jobs.
 Persist: background=true, persist_on_release=true keeps the job alive across agent lifecycle cleanup (session end, /new, compression, error recovery, stop-on-max-iterations). Use ONLY for long-running jobs the user explicitly wants to outlive the conversation; the user can still stop it on purpose.
 """
 
@@ -1470,6 +1470,7 @@ def terminal_tool(
                 completion_output_chars=_completion_output_chars,
                 heartbeat_seconds=heartbeat,
                 persist_on_release=persist_on_release,
+                _host_local=_host_local,
             )
             if plan.promoted_from_foreground_timeout is not None:
                 result = _with_promoted_note(result, plan.promoted_from_foreground_timeout)
@@ -1526,11 +1527,6 @@ TERMINAL_SCHEMA = {
             "workdir": {
                 "type": "string",
                 "description": "Working directory for this command (absolute path). Defaults to the session working directory."
-            },
-            "pty": {
-                "type": "boolean",
-                "description": "With background=true: run in a pseudo-terminal for interactive CLI tools (Codex, Claude Code, Python REPL). Local backend only. Default: false.",
-                "default": False
             },
             "notify": {
                 "description": "With background=true: notify=true fires exactly one notification when the process exits (the right choice for nearly every bounded task — builds, tests, deploys). notify=['pattern', ...] instead notifies when a line matches a pattern — ONLY for one-shot readiness signals on processes that never exit (e.g. ['Application startup complete']); rate-limited and auto-disabled if it over-fires. Omit for silent daemons.",

@@ -53,7 +53,7 @@ class TestTerminalRequirements:
         names = {tool["function"]["name"] for tool in tools}
 
         assert "terminal" in names
-        assert "execute_code" in names
+        assert "execute_code" not in names  # SEC-3 withholds model kernels on every backend.
 
 
 class TestCheckFnTransientFailureSuppression:
@@ -363,7 +363,7 @@ class TestCheckFnTransientFailureSuppression:
         names = {tool["function"]["name"] for tool in tools}
 
         assert "terminal" in names
-        assert "execute_code" in names
+        assert "execute_code" not in names  # SEC-3 withholds model kernels on every backend.
 
     def test_terminal_and_execute_code_tools_hide_for_unsupported_vercel_runtime(self, monkeypatch):
         monkeypatch.setenv("VERCEL_OIDC_TOKEN", "oidc-token")

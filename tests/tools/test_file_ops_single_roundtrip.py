@@ -53,7 +53,7 @@ def shell(_ops, monkeypatch):
 @pytest.fixture
 def native(_ops, monkeypatch):
     """Same wiring with the native fast path on."""
-    monkeypatch.delenv("HERMES_NATIVE_FILE_READ", raising=False)
+    monkeypatch.setenv("HERMES_NATIVE_FILE_READ", "1")
     return _ops
 
 def _write(tmp_path, name, data: bytes):
@@ -326,6 +326,12 @@ class TestNativeRead:
         env.cwd = "/tmp"
         assert ShellFileOperations(env)._native_read_enabled() is False
 
+    def test_supervised_gateway_forces_native_read_off(self, native, monkeypatch):
+        ops, _calls = native
+        from tools import process_registry
+        monkeypatch.setattr(process_registry, "_is_supervised_gateway_process", lambda: True)
+        assert ops._native_read_enabled() is False
+
     def test_tilde_still_expands_through_the_shell(self, native):
         ops, calls = native
         r = ops.read_file("~/hermes-no-such-file-7f3a.txt")
@@ -422,7 +428,7 @@ class TestNativeReadParity:
         via_shell = ops.read_file(p, **kwargs).to_dict()
         assert calls and READ_PROBE_MARK in calls[0]
         calls.clear()
-        monkeypatch.delenv("HERMES_NATIVE_FILE_READ")
+        monkeypatch.setenv("HERMES_NATIVE_FILE_READ", "1")
         via_native = ops.read_file(p, **kwargs).to_dict()
         assert via_native == via_shell
         # The native path touches the shell only for the UTF-16 rescue of binaries.
@@ -446,7 +452,7 @@ class TestNativeReadParity:
         ):
             monkeypatch.setenv("HERMES_NATIVE_FILE_READ", "0")
             via_shell = ops.read_file(p).to_dict()
-            monkeypatch.delenv("HERMES_NATIVE_FILE_READ")
+            monkeypatch.setenv("HERMES_NATIVE_FILE_READ", "1")
             calls.clear()
             via_native = ops.read_file(p).to_dict()
             assert via_native == via_shell, p

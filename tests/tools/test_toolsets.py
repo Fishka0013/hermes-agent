@@ -59,6 +59,31 @@ class TestGetToolset:
 
 class TestResolveToolset:
 
+    def test_ordinary_core_excludes_computer_use_but_explicit_toolset_remains(self):
+        ordinary = set(resolve_toolset("hermes-cli", include_registry=False))
+        assert "computer_use" not in ordinary
+        explicit = set(resolve_toolset("computer_use", include_registry=False))
+        assert explicit == {"computer_use"}
+
+    def test_implicit_all_never_grants_desktop_after_driver_install(self):
+        import model_tools
+        for selection in (None, ["all"], ["*"], ["hermes-cli"]):
+            assert "computer_use" not in model_tools._select_tool_names(selection, [], True)
+        assert "computer_use" not in resolve_toolset("all", include_registry=False)
+        assert "computer_use" not in resolve_toolset("*", include_registry=False)
+        assert "computer_use" in model_tools._select_tool_names(["computer_use"], [], True)
+        assert "computer_use" not in model_tools._select_tool_names(["computer_use"], ["computer_use"], True)
+
+    def test_custom_include_cannot_smuggle_desktop_into_implicit_all(self):
+        import model_tools
+        TOOLSETS["_sec3_desktop_include"] = {"description": "explicit operator bundle", "tools": [], "includes": ["computer_use"]}
+        try:
+            for selection in (None, ["all"], ["*"]):
+                assert "computer_use" not in model_tools._select_tool_names(selection, [], True)
+            assert "computer_use" in resolve_toolset("_sec3_desktop_include")
+        finally:
+            del TOOLSETS["_sec3_desktop_include"]
+
     def test_cycle_detection(self):
         # Create a cycle: A includes B, B includes A
         TOOLSETS["_cycle_a"] = {"description": "test", "tools": ["t1"], "includes": ["_cycle_b"]}

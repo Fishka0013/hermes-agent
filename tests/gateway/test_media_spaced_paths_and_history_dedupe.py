@@ -96,3 +96,13 @@ class TestHistoryMediaDedupe:
 
     def test_empty_history_empty_set(self):
         assert _collect_history_media_paths([]) == set()
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

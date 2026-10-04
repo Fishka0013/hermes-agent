@@ -30,7 +30,8 @@ class TestReadFileHandler:
         mock_ops.read_file.return_value = result_obj
         mock_get.return_value = mock_ops
 
-        _handle_read_file({"path": "/tmp/test.txt"}, task_id="t-default")
+        with patch("tools.file_tools._model_read_target", return_value="/tmp/test.txt"):
+            _handle_read_file({"path": "/tmp/test.txt"}, task_id="t-default")
         schema_default = READ_FILE_SCHEMA["parameters"]["properties"]["limit"]["default"]
         assert mock_ops.read_file.call_args.args[2] == schema_default
 
@@ -97,7 +98,8 @@ class TestWriteFileHandler:
             mock_ops.write_file.return_value = result_obj
             mock_get.return_value = mock_ops
 
-            result = json.loads(_handle_write_file({"path": "/tmp/empty.txt", "content": ""}))
+            with patch("tools.file_tools._model_write_target", return_value="/tmp/empty.txt"):
+                result = json.loads(_handle_write_file({"path": "/tmp/empty.txt", "content": ""}))
             assert result["status"] == "ok"
 
     def test_non_string_content_returns_error(self):

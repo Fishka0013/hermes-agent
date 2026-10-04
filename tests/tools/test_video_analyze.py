@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -87,6 +88,20 @@ class TestHandleVideoAnalyze:
 class TestVideoAnalyzeTool:
     """Core video analysis function tests."""
 
+    @pytest.fixture(autouse=True)
+    def _local_workspace(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TERMINAL_ENV", "local")
+        monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+        # Production security config is profile-scoped and independent of cwd.
+        home = tmp_path / "home"
+        home.mkdir(exist_ok=True)
+        (home / "config.yaml").write_text(
+            json.dumps({"security": {"model_workspace_root": str(tmp_path)}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
     def _run(self, coro):
         return asyncio.get_event_loop().run_until_complete(coro)
 
@@ -131,6 +146,21 @@ class TestVideoAnalyzeTool:
         assert "secret-bearing environment file" in data["error"]
         mock_llm.assert_not_awaited()
 
+    @pytest.mark.parametrize("file_uri", [False, True])
+    def test_outside_video_is_blocked_before_provider(self, tmp_path, file_uri):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory(prefix="sec3-video-outside-", dir=tmp_path.parent) as outside:
+            video = Path(outside) / "outside.mp4"
+            video.write_bytes(b"NON-SENSITIVE OUTSIDE VIDEO")
+            source = video.as_uri() if file_uri else str(video)
+            with patch("tools.vision_tools.async_call_llm", new_callable=AsyncMock) as provider:
+                payload = json.loads(self._run(video_analyze_tool(source, "Describe this")))
+            assert payload["success"] is False
+            assert "outside MODEL_WORKSPACE_ROOT" in payload["error"]
+            provider.assert_not_awaited()
+
     def test_unsupported_format(self, tmp_path):
         """Unsupported extension raises error."""
         video = tmp_path / "clip.flv"
@@ -140,6 +170,28 @@ class TestVideoAnalyzeTool:
         data = json.loads(result)
         assert data["success"] is False
         assert "unsupported video format" in data["analysis"].lower()
+
+    def test_suffix_free_published_mp4_reaches_provider(self, tmp_path):
+        """Opaque staged handles remain readable without trusting cache paths."""
+        video = tmp_path / "opaque-handle"
+        content = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00" * 32
+        video.write_bytes(content)
+        with patch("tools.vision_tools.async_call_llm", new_callable=AsyncMock) as provider:
+            provider.return_value = MagicMock()
+            with patch("tools.vision_tools.extract_content_or_reasoning", return_value="OK"):
+                result = json.loads(self._run(video_analyze_tool(str(video), "Describe this")))
+        assert result["success"] is True
+        provider.assert_awaited_once()
+        media = provider.call_args.kwargs["messages"][0]["content"][1]
+        assert media["video_url"]["url"] == "data:video/mp4;base64," + base64.b64encode(content).decode()
+
+    def test_suffix_free_non_video_blocks_provider(self, tmp_path):
+        video = tmp_path / "opaque-non-video"
+        video.write_bytes(b"not a video")
+        with patch("tools.vision_tools.async_call_llm", new_callable=AsyncMock) as provider:
+            result = json.loads(self._run(video_analyze_tool(str(video), "Describe this")))
+        assert result["success"] is False
+        provider.assert_not_awaited()
 
     def test_api_message_format(self, tmp_path):
         """Verify the message sent to LLM uses video_url content type."""
@@ -171,13 +223,10 @@ class TestVideoAnalyzeTool:
         # provider uses its full output budget (max-tokens-knob policy).
         assert "max_tokens" not in captured_kwargs
 
-    def test_non_local_backend_reads_video_from_terminal_backend(self, tmp_path, monkeypatch):
-        """Non-local terminal backends must not read local host video paths.
-
-        The read routes through the shared media resolver
-        (tools.image_source, ``permitted=("video",)``) which exec-reads the
-        bytes inside the sandbox — so the analyzed video is the container's
-        file, never the host's.
+    def test_non_local_backend_uses_centrally_approved_workspace_video(self, tmp_path, monkeypatch):
+        """An existing file approved by MODEL_WORKSPACE_ROOT is readable
+        independently of the terminal backend; cwd/backend never adds authority.
+        The separate outside-video regression must still fail before provider I/O.
         """
         host_video = tmp_path / "clip.mp4"
         host_video.write_bytes(b"HOST-VIDEO")
@@ -219,11 +268,11 @@ class TestVideoAnalyzeTool:
 
         data = json.loads(result)
         assert data["success"] is True
-        assert env_lookups == ["task-123"]
+        assert env_lookups == []
         video_url = captured_kwargs["messages"][0]["content"][1]["video_url"]["url"]
         uploaded_bytes = base64.b64decode(video_url.split(",", 1)[1])
-        assert uploaded_bytes == remote_bytes
-        assert uploaded_bytes != host_video.read_bytes()
+        assert uploaded_bytes == host_video.read_bytes()
+        assert uploaded_bytes != remote_bytes
 
 # ---------------------------------------------------------------------------
 # Toolset registration

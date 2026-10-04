@@ -1,6 +1,7 @@
 """Tests for the GUI-surface ``read_preview`` tool."""
 
 import json
+import pytest
 
 from tools import read_preview_tool as rp
 
@@ -24,9 +25,24 @@ def test_passes_json_through():
     assert result == payload
 
 
-def test_wraps_non_json_text():
+def test_unverified_non_json_text_is_blocked():
     result = json.loads(rp.read_preview_tool(callback=lambda **_: "plain words"))
-    assert result == {"text": "plain words"}
+    assert "error" in result and "plain words" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("payload", [
+    {"kind": "file", "url": "file:///outside/private.html", "text": "outside sentinel"},
+    {"kind": "file", "url": "https://example.com", "path": "/outside/private.html", "text": "outside sentinel"},
+    {"kind": "url", "url": "FiLe:///outside/private.html", "text": "outside sentinel"},
+    {"kind": "url", "url": "file%3A%2F%2F%2Foutside/private.html", "text": "outside sentinel"},
+    {"kind": "url", "url": "data:text/html,outside", "text": "outside sentinel"},
+    {"kind": "artifact", "url": "https://example.com", "text": "outside sentinel"},
+    {"kind": "url", "text": "outside sentinel"},
+])
+def test_local_or_unverified_preview_never_returns_page_bytes(payload):
+    result = rp.read_preview_tool(callback=lambda **_: json.dumps(payload))
+    assert "error" in json.loads(result)
+    assert "outside sentinel" not in result
 
 
 def test_window_forwarded_and_validated():
@@ -34,7 +50,7 @@ def test_window_forwarded_and_validated():
 
     def cb(**kwargs):
         seen.update(kwargs)
-        return json.dumps({"kind": "url"})
+        return json.dumps({"kind": "url", "url": "https://example.com"})
 
     rp.read_preview_tool(start=100, count=500, callback=cb)
     assert seen == {"start": 100, "count": 500}

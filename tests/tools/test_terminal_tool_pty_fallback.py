@@ -26,7 +26,7 @@ def test_command_requires_pipe_stdin_detects_gh_with_token():
     ) is False
 
 
-def test_terminal_background_keeps_pty_for_regular_interactive_commands(monkeypatch, tmp_path):
+def test_private_control_plane_keeps_pty_for_regular_interactive_commands(monkeypatch, tmp_path):
     config = _base_config(tmp_path)
     dummy_env = SimpleNamespace(env={})
     captured = {}
@@ -48,6 +48,7 @@ def test_terminal_background_keeps_pty_for_regular_interactive_commands(monkeypa
                 command="python3 -c \"print(input())\"",
                 background=True,
                 pty=True,
+                _host_local=True,
             )
         )
     finally:

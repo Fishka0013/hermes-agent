@@ -7,6 +7,7 @@ the host applies, so a sandbox path (or a symlink) at ``~/.ssh/...`` never cross
 """
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -18,15 +19,16 @@ from tools.environments.base import BaseEnvironment, FileFetchError
 class _FakeRemoteEnv:
     """Stands in for a live SSHEnvironment: a tiny remote filesystem + symlink table."""
 
-    _remote_home = "/home/agent"
-
-    def __init__(self):
-        self.files = {"/home/agent/out/report.txt": b"hello from sandbox",
-                      "/home/agent/.ssh/id_rsa": b"SECRET"}
-        self.links = {"/home/agent/out/innocent.txt": "/home/agent/.ssh/id_rsa"}
+    def __init__(self, root):
+        self._remote_home = str(root)
+        self.files = {str(root / "out/report.txt"): b"hello from sandbox",
+                      str(root / ".ssh/id_rsa"): b"SECRET"}
+        self.links = {str(root / "out/innocent.txt"): str(root / ".ssh/id_rsa")}
         self.fetched: list = []
+        self.resolved: list = []
 
     def fetch_realpath(self, remote_path):
+        self.resolved.append(remote_path)
         return self.links.get(remote_path, remote_path)
 
     def fetch_file(self, remote_path, local_dest, *, max_bytes):
@@ -38,32 +40,58 @@ class _FakeRemoteEnv:
 
 @pytest.fixture
 def remote_env(monkeypatch, tmp_path):
-    env = _FakeRemoteEnv()
+    home = tmp_path / "home"
+    home.mkdir()
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (home / "config.yaml").write_text(json.dumps({"security": {"model_workspace_root": str(root)}}))
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    env = _FakeRemoteEnv(root)
     monkeypatch.setattr(media_fetch, "_active_remote_env", lambda: env)
     monkeypatch.setattr("gateway.platforms.base.DOCUMENT_CACHE_DIR", tmp_path / "cache" / "documents")
-    monkeypatch.setattr("gateway.platforms.base.MEDIA_DELIVERY_SAFE_ROOTS", (tmp_path / "cache" / "documents",))
+    monkeypatch.setattr("gateway.platforms.base.MEDIA_DELIVERY_SAFE_ROOTS", (root,))
     return env
 
 
 def test_sandbox_artifact_is_fetched_but_credentials_and_symlinks_to_them_are_not(remote_env):
-    media = [("/home/agent/out/report.txt", False), ("/home/agent/out/innocent.txt", False),
-             ("/home/agent/.ssh/id_rsa", False), ("~/out/report.txt", False)]
+    home = remote_env._remote_home
+    media = [(home + "/out/report.txt", False), (home + "/out/innocent.txt", False),
+             (home + "/.ssh/id_rsa", False), ("~/out/report.txt", False)]
     delivered = BasePlatformAdapter.filter_media_delivery_paths(media)
 
     assert [Path(p).read_bytes() for p, _ in delivered] == [b"hello from sandbox", b"hello from sandbox"]
-    assert all(Path(p).name.endswith("_report.txt") for p, _ in delivered)
     # The credential file and the symlink that resolves to it were refused BEFORE any bytes moved.
-    assert remote_env.fetched == ["/home/agent/out/report.txt", "/home/agent/out/report.txt"]
+    assert remote_env.fetched == [home + "/out/report.txt", home + "/out/report.txt"]
+    for path, _ in delivered:
+        assert Path(path).is_relative_to(Path(home) / ".tmp" / "model-artifacts" / "remote-media")
+        assert Path(path + ".receipt.json").is_file()
 
 
 def test_local_backend_and_strict_mode_do_not_fetch(monkeypatch, tmp_path, remote_env):
     """Strict mode keeps its recency gate: a fetched copy would land in an allowlisted root and skip it."""
     monkeypatch.setenv("HERMES_MEDIA_DELIVERY_STRICT", "1")
-    assert BasePlatformAdapter.filter_media_delivery_paths([("/home/agent/out/report.txt", False)]) == []
+    assert BasePlatformAdapter.filter_media_delivery_paths([(remote_env._remote_home + "/out/report.txt", False)]) == []
     monkeypatch.delenv("HERMES_MEDIA_DELIVERY_STRICT")
     monkeypatch.setattr(media_fetch, "_active_remote_env", lambda: None)
     assert BasePlatformAdapter.filter_media_delivery_paths([(str(tmp_path / "nope.txt"), False)]) == []
     assert remote_env.fetched == []
+
+
+def test_outside_workspace_is_blocked_before_remote_resolution(remote_env, tmp_path):
+    source = str(tmp_path / "outside.txt")
+    remote_env.files[source] = b"outside sentinel"
+    assert media_fetch.fetch_remote_media(source) is None
+    assert remote_env.resolved == [] and remote_env.fetched == []
+
+
+def test_remote_symlink_escape_cannot_fetch_source(remote_env, tmp_path):
+    candidate = remote_env._remote_home + "/out/escape.txt"
+    outside = str(tmp_path / "outside.txt")
+    remote_env.files[outside] = b"outside sentinel"
+    remote_env.links[candidate] = outside
+    assert media_fetch.fetch_remote_media(candidate) is None
+    assert remote_env.resolved == [candidate] and remote_env.fetched == []
 
 
 class _ScriptedEnv(BaseEnvironment):

@@ -521,7 +521,8 @@ class TestTranscribeLocalExtended:
 
         assert result["success"] is True
         mock_whisper_cls.assert_called_once_with(
-            "base", local_files_only=True, device="cpu", compute_type="float32"
+            "base", local_files_only=True, device="cpu",
+            compute_type="int8" if __import__("tools.transcription_local", fromlist=["_should_force_faster_whisper_cpu"])._should_force_faster_whisper_cpu() else "float32"
         )
 
 

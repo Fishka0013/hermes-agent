@@ -63,6 +63,20 @@ def test_heartbeat_carries_only_new_output_and_stops_at_exit(tmp_path, monkeypat
                            timeout=2.5)
 
 
+def test_first_heartbeat_includes_output_emitted_before_it_was_armed(monkeypatch):
+    registry = ProcessRegistry()
+    monkeypatch.setattr(registry, "_ensure_heartbeat_thread", lambda: None)
+    session = pr.ProcessSession(id="proc_fast", command="echo first", notify_on_complete=True)
+    session.append_output("first line before notification bookkeeping\n")
+
+    registry.arm_heartbeat(session, pr.HEARTBEAT_MIN_SECONDS)
+    registry._emit_heartbeat(session, now=session._heartbeat_last + pr.HEARTBEAT_MIN_SECONDS)
+    (beat,) = _drain(registry.completion_queue)
+    assert beat["output"] == "first line before notification bookkeeping\n"
+    registry._emit_heartbeat(session, now=session._heartbeat_last + pr.HEARTBEAT_MIN_SECONDS)
+    assert _drain(registry.completion_queue) == []
+
+
 def test_a_tick_with_no_new_output_queues_nothing():
     """Every queued heartbeat costs the owning session a full model turn, so a quiet tick is
     skipped rather than delivered as "(no new output)"; the next tick with output still carries

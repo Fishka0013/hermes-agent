@@ -30,8 +30,20 @@ def local_kernel(tmp_path, monkeypatch):
 
 
 def run(code, reset=False):
-    return json.loads(registry.dispatch("execute_code", {"code": code, "reset": reset},
-                                        task_id="helper-contract", enabled_tools=[]))
+    # The internal kernel keeps its helper contract; the model handler is withheld by SEC-3.
+    return json.loads(code_execution_tool.execute_code(code, reset=reset,
+                                                     task_id="helper-contract", enabled_tools=[]))
+
+
+def test_registered_model_handler_cannot_spawn_a_kernel(monkeypatch):
+    from tools.code_kernel import _KERNELS
+    def no_execution(*args, **kwargs):
+        raise AssertionError("model handler reached unrestricted execution")
+    monkeypatch.setattr(code_execution_tool, "execute_code", no_execution)
+    for reset in (False, True):
+        result = json.loads(registry.dispatch("execute_code", {"code": "print(1)", "reset": reset}))
+        assert "error" in result
+    assert not _KERNELS
 
 
 def test_schema_helper_instructions_work_across_kernel_lifetimes():

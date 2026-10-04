@@ -18,14 +18,13 @@ _HERMES_CORE_TOOLS = [
     "browser_navigate", "browser_snapshot", "browser_click",
     "browser_type", "browser_scroll", "browser_back",
     "browser_press", "browser_get_images",
-    "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
+    "browser_vision", "browser_console", "browser_dialog",
     "browser_vault_list", "browser_vault_unlock", "browser_vault_fill", "browser_vault_save_login", "browser_vault_enter_code",  # ride with the browser
-    "browser_exec",  # replaces the other browser tools when browser.backend is "browser-use"
     "text_to_speech",
     "todo_list", "memory",
     "session_search",
     "clarify",
-    "execute_code", "delegate_task",
+    "delegate_task",
     "cronjob_manage",
     "kanban_show", "kanban_list",
     "kanban_complete", "kanban_block", "kanban_request_review",
@@ -34,7 +33,6 @@ _HERMES_CORE_TOOLS = [
     "kanban_comment", "kanban_create", "kanban_link",
     "kanban_unblock",
     "kanban_attach", "kanban_attach_url", "kanban_attachments",
-    "computer_use",
     # Service-gated connector account status and authorization links.
     "manage_connections",
 ]
@@ -114,6 +112,11 @@ TOOLSETS = {
         "Browser automation for web interaction (navigate, click, type, scroll, "
         "iframes, hold-click)",
         [t for t in _HERMES_CORE_TOOLS if t.startswith("browser_")],
+    ),
+    "browser_vault": _ts(
+        "Browser credential vault access and authorization (parent/operator scope)",
+        ["browser_vault_list", "browser_vault_unlock", "browser_vault_fill",
+         "browser_vault_save_login", "browser_vault_enter_code"],
     ),
     "cronjob": _ts(
         "Cronjob management tool - create, list, update, pause, resume, remove, and "
@@ -389,7 +392,10 @@ def resolve_toolset(name: str, visited: Set[str] = None, *, include_registry: bo
     if name in {"all", "*"}:
         all_tools: Set[str] = set()
         for toolset_name in get_toolset_names():
+            if toolset_name == "computer_use":
+                continue  # Desktop authority requires explicit operator selection.
             all_tools.update(resolve_toolset(toolset_name, visited.copy(), include_registry=include_registry))
+        all_tools.discard("computer_use")  # Composite includes cannot turn a wildcard into an opt-in.
         return sorted(all_tools)
 
     # Diamond include or cycle: [] silently — the tools are collected via another path.

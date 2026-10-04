@@ -14,7 +14,10 @@ import threading
 import time
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from tools.delegate_tool import (
     DELEGATE_BLOCKED_TOOLS,
@@ -28,6 +31,13 @@ from tools.delegate_tool import (
     _resolve_delegation_credentials,
 )
 from hermes_state import SessionDB
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_checkout_bootstrap(monkeypatch):
+    # Lazy imports of run_agent must stay inside the test environment rather than
+    # probing the production sealed-install manifest beside the live checkout.
+    monkeypatch.setattr("pm.environments.payload_venv", lambda *_a, **_k: None)
 
 
 def _make_mock_parent(depth=0):
@@ -58,7 +68,7 @@ def _make_mock_parent(depth=0):
 class TestStripBlockedTools(unittest.TestCase):
     def test_removes_blocked_toolsets(self):
         result = _strip_blocked_tools(["terminal", "file", "delegation", "clarify", "memory", "code_execution"])
-        self.assertEqual(sorted(result), ["code_execution", "file", "terminal"])
+        self.assertEqual(sorted(result), ["file", "terminal"])
 
     def test_strips_cronjob_toolset(self):
         """Regression for issue #43466: child subagents must not inherit
@@ -112,9 +122,9 @@ class TestStripBlockedTools(unittest.TestCase):
             "memory",
         ):
             self.assertIn(toolset_name, disabled)
-        # code_execution is deliberately NOT denied — children keep
-        # execute_code for programmatic tool calling (Teknium, Jul 2026).
-        self.assertNotIn("code_execution", disabled)
+        # Unrestricted Python is not confined by the RPC whitelist; a mixed
+        # composite must preserve SEC-3's child hard deny after expansion.
+        self.assertIn("code_execution", disabled)
 
         definitions = model_tools.get_tool_definitions(
             enabled_toolsets=kwargs["enabled_toolsets"],
@@ -322,7 +332,7 @@ class TestDelegateTask(unittest.TestCase):
                 self.assertIsInstance(child_db, SessionDB)
                 self.assertIsNot(child_db, parent_db)
                 self.assertEqual(
-                    str(child_db.db_path), str(parent_db.db_path)
+                    Path(child_db.db_path).resolve(), Path(parent_db.db_path).resolve()
                 )
             finally:
                 if child_db is not None:

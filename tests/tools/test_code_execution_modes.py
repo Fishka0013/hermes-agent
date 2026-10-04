@@ -28,6 +28,12 @@ def test_selected_interpreter_environment_and_real_rpc(child_env, project_python
     (user_lib / "user_probe.py").write_text("VALUE = 'user → 雪'\n", encoding="utf-8")
     witness = child_env / "rpc-witness.txt"
     witness.write_text("RPC → 雪\n", encoding="utf-8")
+    home = Path(os.environ["HERMES_HOME"])
+    home.mkdir(parents=True)
+    (home / "config.yaml").write_text(
+        json.dumps({"security": {"model_workspace_root": str(child_env)}}),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join(map(str, [repo, site, repo, user_lib, user_lib])))
     monkeypatch.setenv("OPENAI_API_KEY", "fake-provider-secret")
     before = dict(os.environ)

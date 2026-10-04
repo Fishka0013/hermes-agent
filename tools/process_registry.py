@@ -1451,7 +1451,7 @@ class ProcessRegistry(ProcessCheckpointMixin):
     def spawn_via_env(
         self, env: Any, command: str, cwd: str = None, task_id: str = "", session_key: str = "",
         timeout: int = 10, owner_task_id: str = "", persist_on_release: bool = False) -> ProcessSession:
-        """Spawn a background process inside a non-local backend's sandbox.
+        """Spawn a background process through the owning environment's envelope.
         The command is wrapped to capture its in-sandbox PID and redirect output to a
         log file that later execute() calls poll. No live pipe or stdin, but it runs in
         the correct sandbox context. ``persist_on_release`` keeps the process out of
@@ -1461,11 +1461,16 @@ class ProcessRegistry(ProcessCheckpointMixin):
         temp_dir = self._env_temp_dir(env)
         log_path, pid_path, exit_path = (f"{temp_dir}/hermes_bg_{session.id}.{ext}" for ext in ("log", "pid", "exit"))
         q = shlex.quote
+        completion_driver = (
+            f"bash -lc {q(command)}; "
+            f"rc=$?; printf '%s\\n' \"$rc\" > {q(exit_path)}")
+        # Protect the completion writer as well as the command from the
+        # short-lived transport shell's exit. Brace the launch so A&&B& does
+        # not background the setup/driver group and lose its exit receipt.
         bg_command = (
-            f"mkdir -p {q(temp_dir)} && "
-            f"( nohup bash -lc {q(command)} > {q(log_path)} 2>&1; "
-            f"rc=$?; printf '%s\\n' \"$rc\" > {q(exit_path)} ) & "
-            f"echo $! > {q(pid_path)} && cat {q(pid_path)}")
+            f"{{ [ -d {q(temp_dir)} ] || mkdir -p {q(temp_dir)}; }} && {{ "
+            f"nohup bash -c {q(completion_driver)} > {q(log_path)} 2>&1 < /dev/null & "
+            f"echo $! > {q(pid_path)} && cat {q(pid_path)}; }}")
         try:
             result = env.execute(bg_command, timeout=timeout, rewrite_compound_background=False)
             output = result.get("output", "").strip()

@@ -123,7 +123,7 @@ def test_background_start_error_redacts_exception_text(monkeypatch):
     class FailingRegistry:
         pending_watchers = []
 
-        def spawn_local(self, **kwargs):
+        def spawn_via_env(self, **kwargs):
             raise RuntimeError(f"spawn failed with {SECRET}")
 
     import tools.process_registry as process_registry_mod

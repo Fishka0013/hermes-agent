@@ -52,7 +52,9 @@ def _child_runtime(parent: SimpleNamespace, *, override_base_url=None):
     )
 
 
-def test_inherited_named_custom_child_uses_native_vision(tmp_path):
+def test_inherited_named_custom_child_uses_native_vision(tmp_path, monkeypatch):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+    configure_model_workspace(monkeypatch, tmp_path)
     runtime = _child_runtime(_parent())
     assert runtime["provider"] == "custom"
 
@@ -62,6 +64,8 @@ def test_inherited_named_custom_child_uses_native_vision(tmp_path):
     # missing identity (a /model switch or session-scoped pick is where the aux slow path fired live).
     get_hermes_home().joinpath("config.yaml").write_text(
         """\
+security:
+  model_workspace_root: ROOT_PLACEHOLDER
 model:
   provider: custom:text-endpoint
   default: text-model
@@ -72,7 +76,7 @@ providers:
     models:
       vision-model:
         supports_vision: true
-""",
+""".replace("ROOT_PLACEHOLDER", str(tmp_path)),
         encoding="utf-8",
     )
 

@@ -53,17 +53,24 @@ def test_old_generated_media_is_not_swept(tmp_path, monkeypatch, save, sweeper):
     home.mkdir(parents=True)
     monkeypatch.setattr(base, "_HERMES_ROOT", tmp_path)
     monkeypatch.setenv("HERMES_HOME", str(home))
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+    root = configure_model_workspace(monkeypatch, tmp_path, root=tmp_path / "workspace", home=home)
 
     path = save(base64.b64encode(PNG_1PX).decode(), prefix="red_test")
     _backdate_hours(path)
     removed = sweeper(max_age_hours=24)
     assert path.exists(), f"25h-old generated media was swept ({removed} removed): {path}"
 
-    # Still deliverable on a strict gateway with recency trust off: only the
-    # cache allowlist can vouch for a day-old file.
+    # Runtime durability grants no model cache authority. Publish a trusted
+    # generated artifact inside Root; strict delivery also needs its own allowlist.
     monkeypatch.setenv("HERMES_MEDIA_DELIVERY_STRICT", "1")
     monkeypatch.setenv("HERMES_MEDIA_TRUST_RECENT_FILES", "0")
-    assert base.validate_media_delivery_path(str(path)) == str(path.resolve())
+    assert base.validate_media_delivery_path(str(path)) is None
+    from agent.model_file_policy import make_internal_artifact_source, publish_internal_artifact_for_model
+    staged = publish_internal_artifact_for_model(
+        make_internal_artifact_source(path, source_class="generated-media-test"), namespace="generation")
+    monkeypatch.setenv("HERMES_MEDIA_ALLOW_DIRS", str(root / ".tmp"))
+    assert base.validate_media_delivery_path(str(staged.path)) == str(staged.path)
 
 
 def test_generated_dir_is_mounted_from_the_writers_location(tmp_path, monkeypatch):

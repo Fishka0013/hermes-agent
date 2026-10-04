@@ -117,7 +117,26 @@ def _tool(
 
 def _callback_tool(module: str, func: str, callback_attr: str, *arg_specs: _ArgSpec) -> InlineToolExecutor:
     """Executor for a GUI-callback tool: mapped args plus ``callback=getattr(agent, callback_attr, None)``."""
-    return _tool(module, func, *arg_specs, callback=lambda agent, ctx: getattr(agent, callback_attr, None))
+    def callback(agent, ctx):
+        resolved = getattr(agent, callback_attr, None)
+        if resolved is None or callback_attr != "drive_preview_callback":
+            return resolved
+
+        def confined_action(payload):
+            from tools.read_preview_tool import read_preview_tool
+            read_callback = getattr(agent, "read_preview_callback", None)
+            before = read_preview_tool(count=1, callback=read_callback)
+            if json.loads(before).get("error"):
+                return before
+            result = resolved(payload)
+            # Navigation can change the page. Do not return a local-page action
+            # inventory after back/forward/reload or another page interaction.
+            after = read_preview_tool(count=1, callback=read_callback)
+            return after if json.loads(after).get("error") else result
+
+        return confined_action
+
+    return _tool(module, func, *arg_specs, callback=callback)
 
 
 def _session_search(agent, args: dict, ctx: InlineToolContext) -> Any:

@@ -22,11 +22,16 @@ _PNG_BYTES = base64.b64decode(
 
 
 class TestResolveMediaToDataUrls(unittest.TestCase):
+    @pytest.fixture(autouse=True)
+    def _workspace(self, tmp_path, monkeypatch):
+        from tests.sec3_workspace_fixtures import configure_model_workspace
+        self._root = configure_model_workspace(monkeypatch, tmp_path)
+
     def _write_png(self, tmpdir_name="hermes_media_test"):
         import tempfile
         from pathlib import Path
 
-        d = Path(tempfile.mkdtemp(prefix=tmpdir_name))
+        d = Path(tempfile.mkdtemp(prefix=tmpdir_name, dir=self._root))
         p = d / "shot.png"
         p.write_bytes(_PNG_BYTES)
         return p

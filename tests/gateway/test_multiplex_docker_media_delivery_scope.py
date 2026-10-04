@@ -55,13 +55,13 @@ async def _hold_typing(_chat_id, interval=2.0, metadata=None, stop_event=None):
 def _docker_profile(home: Path, mount: Path) -> None:
     mount.mkdir(parents=True)
     (home / "config.yaml").write_text(json.dumps(
-        {"terminal": {"backend": "docker", "docker_volumes": [f"{mount}:/output"]}}), encoding="utf-8")
+        {"security": {"model_workspace_root": str(mount.parent)}, "terminal": {"backend": "docker", "docker_volumes": [f"{mount}:/output"]}}), encoding="utf-8")
 
 
 @pytest.mark.asyncio
 async def test_secondary_docker_media_resolves_via_its_own_mounts(tmp_path, monkeypatch):
     root = tmp_path / "hermes"
-    default_out, public_out = root / "cache" / "output", root / "profiles" / "public" / "cache" / "output"
+    default_out, public_out = root / "workspace" / "output", root / "profiles" / "public" / "workspace" / "output"
     _docker_profile(root, default_out)
     _docker_profile(root / "profiles" / "public", public_out)
     # The launch process carries the DEFAULT profile's bridged terminal env.

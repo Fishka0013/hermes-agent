@@ -40,6 +40,19 @@ VALID_PNG = (
 _RESOLVES = [(2, 1, 6, "", ("93.184.216.34", 0))]
 
 
+@pytest.fixture(autouse=True)
+def _model_workspace(tmp_path, monkeypatch):
+    """Give local-image contract tests an explicit, profile-owned perimeter."""
+    home = tmp_path / "profile-home"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        json.dumps({"security": {"model_workspace_root": str(tmp_path)}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+
+
 # ---------------------------------------------------------------------------
 # _validate_image_url_async — shape check + SSRF gate on the live download path
 # ---------------------------------------------------------------------------

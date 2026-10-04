@@ -418,7 +418,10 @@ class RetainDBMemoryProvider(MemoryProvider):
         if not self._client:
             return tool_error("RetainDB not initialized")
         try:
-            return json.dumps(self._dispatch(tool_name, args))
+            call_args = dict(args)
+            if tool_name == "retaindb_upload_file":
+                call_args["_sec3_task_id"] = kwargs.get("task_id")
+            return json.dumps(self._dispatch(tool_name, call_args))
         except Exception as exc:
             return tool_error(str(exc))
 
@@ -430,9 +433,21 @@ class RetainDBMemoryProvider(MemoryProvider):
         return {"error": f"{required} is required"} if required and not value else handler(self, args, value)
 
     def _tool_upload_file(self, args: dict, local_path: str) -> Any:
-        path_obj = Path(local_path)
-        if not path_obj.exists():
-            return {"error": f"File not found: {local_path}"}
+        from agent.model_file_policy import resolve_model_read_path, validate_resolution_base
+
+        expanded = Path(local_path).expanduser()
+        try:
+            if expanded.is_absolute():
+                path_obj = resolve_model_read_path(local_path)
+            else:
+                task_id = args.get("_sec3_task_id") or "default"
+                from tools.file_tools_paths import _resolve_base_dir
+                base = validate_resolution_base(
+                    str(_resolve_base_dir(task_id, container_paths=False)))
+                path_obj = resolve_model_read_path(
+                    local_path, resolution_base=base, scope_base=base)
+        except Exception as exc:
+            return {"error": str(exc)}
         try:
             raise_if_read_blocked(str(path_obj))
         except ValueError as exc:

@@ -471,8 +471,9 @@ def _resolve_user_space(client, *, timeout: Optional[float] = None) -> Optional[
 
 
 def _zip_directory(dir_path: Path) -> Path:
-    """Zip a directory tree into a temp file, skipping symlinks, escapes, and read-blocked files."""
+    """Zip an already-approved directory without following symlinks or policy escapes."""
     from agent.file_safety import raise_if_read_blocked
+    from agent.model_file_policy import resolve_model_read_path
 
     root = dir_path.resolve()
     zip_path = Path(tempfile.gettempdir()) / f"openviking_upload_{uuid.uuid4().hex}.zip"
@@ -483,10 +484,11 @@ def _zip_directory(dir_path: Path) -> Path:
             try:
                 resolved = file_path.resolve()
                 resolved.relative_to(root)
+                resolved = resolve_model_read_path(str(resolved))
                 raise_if_read_blocked(str(resolved))
-            except ValueError:
+            except (ValueError, PermissionError):
                 continue
-            zipf.write(file_path, arcname=str(file_path.relative_to(dir_path)).replace("\\", "/"))
+            zipf.write(resolved, arcname=str(file_path.relative_to(dir_path)).replace("\\", "/"))
     return zip_path
 
 
@@ -2471,7 +2473,10 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if handler is None:
             return tool_error(f"Unknown tool: {tool_name}")
         try:
-            return getattr(self, handler)(args)
+            call_args = dict(args)
+            if tool_name == "viking_add_resource":
+                call_args["_sec3_task_id"] = kwargs.get("task_id")
+            return getattr(self, handler)(call_args)
         except Exception as e:
             return tool_error(str(e))
 
@@ -2652,8 +2657,6 @@ class OpenVikingMemoryProvider(MemoryProvider):
         return json.dumps(payload, ensure_ascii=False)
 
     def _tool_add_resource(self, args: dict) -> str:
-        from agent.file_safety import raise_if_read_blocked
-
         url = args.get("url", "")
         if not url:
             return tool_error("url is required")
@@ -2665,25 +2668,53 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
         parsed_url = urlparse(url)
         source_path = None
+        local_reference = False
+        allow_file_uri = False
         if url.startswith(_REMOTE_RESOURCE_PREFIXES):
             pass
         elif parsed_url.scheme == "file":
             if parsed_url.netloc not in {"", "localhost"}:
                 return tool_error(f"Unsupported non-local file URI: {url}")
-            source_path = Path(url2pathname(parsed_url.path)).expanduser()
+            local_reference, allow_file_uri = True, True
         elif not parsed_url.scheme or _is_windows_absolute_path(url):
-            source_path = Path(url).expanduser()
+            # OpenViking's remote-resource contract requires an explicit remote
+            # scheme; no-scheme values are local model paths, including bare filenames.
+            local_reference = True
+
+        if local_reference:
+            from agent.model_file_policy import (
+                resolve_model_candidate_path, resolve_model_directory,
+                resolve_model_read_path, validate_resolution_base,
+            )
+            policy_kwargs: Dict[str, Any] = {"allow_file_uri": allow_file_uri}
+            expanded = Path(url2pathname(parsed_url.path) if allow_file_uri else url).expanduser()
+            if not expanded.is_absolute() and not _is_windows_absolute_path(url):
+                task_id = args.get("_sec3_task_id") or "default"
+                from tools.file_tools_paths import _resolve_base_dir
+                base = validate_resolution_base(
+                    str(_resolve_base_dir(task_id, container_paths=False)))
+                policy_kwargs.update(resolution_base=base, scope_base=base)
+            try:
+                candidate = resolve_model_candidate_path(url, **policy_kwargs)
+                if not candidate.exists():
+                    return tool_error(f"Local resource path does not exist: {url}")
+                source_path = (
+                    resolve_model_directory(str(candidate))
+                    if candidate.is_dir()
+                    else resolve_model_read_path(str(candidate))
+                )
+            except Exception as exc:
+                return tool_error(str(exc))
 
         cleanup_path: Optional[Path] = None
         try:
-            if source_path is None or not source_path.exists():
-                if source_path is not None and _is_local_path_reference(url):
-                    return tool_error(f"Local resource path does not exist: {url}")
+            if source_path is None:
                 payload["path"] = url
             elif source_path.is_dir() or source_path.is_file():
                 if source_path.is_dir():
                     cleanup_path = _zip_directory(source_path)  # directories upload as a zip
                 else:
+                    from agent.file_safety import raise_if_read_blocked
                     try:
                         raise_if_read_blocked(str(source_path))
                     except ValueError as exc:
