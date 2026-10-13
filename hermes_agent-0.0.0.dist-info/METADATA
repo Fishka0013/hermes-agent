@@ -1,0 +1,220 @@
+Metadata-Version: 2.3
+Name: hermes-agent
+Version: 0.0.0
+Summary: The self-improving AI agent — creates skills from experience, improves them during use, and runs anywhere
+Requires-Python: >=3.11,<3.15
+Requires-Dist: openai==2.24.0; python_version >= '3.14'
+Requires-Dist: certifi==2026.5.20; python_version >= '3.14'
+Requires-Dist: truststore==0.10.4; python_version >= '3.14'
+Requires-Dist: python-dotenv==1.2.2; python_version >= '3.14'
+Requires-Dist: fire==0.7.1; python_version >= '3.14'
+Requires-Dist: httpx[socks]==0.28.1; python_version >= '3.14'
+Requires-Dist: rich==14.3.3; python_version >= '3.14'
+Requires-Dist: tenacity==9.1.4; python_version >= '3.14'
+Requires-Dist: tomli-w==1.2.0; python_version >= '3.14'
+Requires-Dist: ruamel.yaml==0.18.16; python_version >= '3.14'
+Requires-Dist: requests==2.33.0; python_version >= '3.14'
+Requires-Dist: jinja2==3.1.6; python_version >= '3.14'
+Requires-Dist: firecrawl-anydoc==0.2.4; python_version >= '3.14'
+Requires-Dist: pydantic==2.13.4; python_version >= '3.14'
+Requires-Dist: prompt_toolkit==3.0.52; python_version >= '3.14'
+Requires-Dist: croniter==6.0.0; python_version >= '3.14'
+Requires-Dist: snowballstemmer==3.1.1; python_version >= '3.14'
+Requires-Dist: packaging==26.0; python_version >= '3.14'
+Requires-Dist: Markdown==3.10.2; python_version >= '3.14'
+Requires-Dist: PyJWT[crypto]==2.13.0; python_version >= '3.14'
+Requires-Dist: urllib3>=2.7.0,<3; python_version >= '3.14'
+Requires-Dist: cryptography==50.0.1; python_version >= '3.14'
+Requires-Dist: tzdata==2025.3; sys_platform == 'win32' and python_version >= '3.14'
+Requires-Dist: psutil==7.2.2; sys_platform != 'android' and python_version >= '3.14'
+Requires-Dist: psutil @ git+https://github.com/giampaolo/psutil.git@380bd2b59c67b0e1b04bbf3a90b11744f4f96644 ; sys_platform == 'android' and python_version >= '3.14'
+Requires-Dist: websockets==15.0.1; python_version >= '3.14'
+Requires-Dist: browser-harness==0.1.13; python_version >= '3.14'
+Requires-Dist: pathspec==1.1.1; python_version >= '3.14'
+Requires-Dist: fastapi>=0.104.0,<1; python_version >= '3.14'
+Requires-Dist: uvicorn>=0.31.0,<1; python_version >= '3.14'
+Requires-Dist: httptools>=0.6.3,<0.9; python_version >= '3.14'
+Requires-Dist: watchfiles>=0.20,<2; python_version >= '3.14'
+Requires-Dist: python-multipart>=0.0.9,<1; python_version >= '3.14'
+Requires-Dist: ptyprocess>=0.7.0,<1; sys_platform != 'win32' and python_version >= '3.14'
+Requires-Dist: pywinpty>=3.0.5,<4; sys_platform == 'win32' and python_version >= '3.14'
+Requires-Dist: pywin32>=306,<312; sys_platform == 'win32' and python_version >= '3.14'
+Requires-Dist: winrt-windows-applicationmodel>=3.2.1,<4; sys_platform == 'win32' and python_version >= '3.14'
+Requires-Dist: winrt-windows-foundation>=3.2.1,<4; sys_platform == 'win32' and python_version >= '3.14'
+Requires-Dist: winrt-windows-foundation-collections>=3.2.1,<4; sys_platform == 'win32' and python_version >= '3.14'
+Requires-Dist: winrt-windows-services-store>=3.2.1,<4; sys_platform == 'win32' and python_version >= '3.14'
+Requires-Dist: Pillow==12.3.0; python_version >= '3.14'
+Requires-Dist: pillow-heif>=1.4.0,<2; python_version >= '3.14'
+Requires-Dist: resvg-py==0.4.0; python_version >= '3.14'
+Requires-Dist: concurrent-log-handler==0.9.29; sys_platform == 'win32' and python_version >= '3.14'
+Requires-Dist: nemo-relay>=0.9,<0.10; ((sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'linux' and platform_machine == 'x86_64' and 'android' not in platform_release) or (sys_platform == 'linux' and platform_machine == 'aarch64' and 'android' not in platform_release) or (sys_platform == 'win32' and platform_machine == 'AMD64') or (sys_platform == 'win32' and platform_machine == 'ARM64')) and python_version >= '3.14'
+Provides-Extra: uvloop
+Requires-Dist: uvloop>=0.15.1,<0.24; (sys_platform != 'win32' and sys_platform != 'cygwin' and sys_platform != 'android' and platform_python_implementation != 'PyPy') and extra == 'uvloop'
+Provides-Extra: anthropic
+Requires-Dist: anthropic==0.87.0; extra == 'anthropic'
+Provides-Extra: exa
+Requires-Dist: exa-py==2.10.2; extra == 'exa'
+Provides-Extra: firecrawl
+Requires-Dist: firecrawl-py==4.17.0; extra == 'firecrawl'
+Provides-Extra: parallel-web
+Requires-Dist: parallel-web==0.4.2; extra == 'parallel-web'
+Provides-Extra: ddgs
+Requires-Dist: ddgs==9.16.0; extra == 'ddgs'
+Provides-Extra: fal
+Requires-Dist: fal-client==0.13.1; extra == 'fal'
+Provides-Extra: edge-tts
+Requires-Dist: edge-tts==7.2.7; extra == 'edge-tts'
+Provides-Extra: neutts
+Requires-Dist: neutts[all]==1.4.1; (python_version < '3.14') and extra == 'neutts'
+Provides-Extra: kittentts
+Requires-Dist: kittentts @ https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl; ((platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin')) and extra == 'kittentts'
+Requires-Dist: misaki[en] @ git+https://github.com/NousResearch/misaki.git@f03fd2be7346952a83d3d4845c217fc7667f322d; ((platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin')) and extra == 'kittentts'
+Requires-Dist: soundfile==0.14.0; ((platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin')) and extra == 'kittentts'
+Provides-Extra: piper
+Requires-Dist: piper-tts==1.8.0; ((platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin')) and extra == 'piper'
+Provides-Extra: modal
+Requires-Dist: modal==1.5.5; extra == 'modal'
+Provides-Extra: daytona
+Requires-Dist: daytona==0.155.0; extra == 'daytona'
+Provides-Extra: vercel
+Requires-Dist: vercel==0.7.2; extra == 'vercel'
+Provides-Extra: google-meet
+Requires-Dist: playwright==1.62.0; extra == 'google-meet'
+Requires-Dist: websockets==15.0.1; extra == 'google-meet'
+Provides-Extra: messaging
+Requires-Dist: python-telegram-bot[webhooks]==22.8; extra == 'messaging'
+Requires-Dist: discord.py[voice]==2.7.1; extra == 'messaging'
+Requires-Dist: aiohttp==3.14.3; extra == 'messaging'
+Requires-Dist: brotlicffi==1.2.0.2; extra == 'messaging'
+Requires-Dist: slack-bolt==1.30.0; extra == 'messaging'
+Requires-Dist: slack-sdk==3.44.1; extra == 'messaging'
+Requires-Dist: qrcode==7.4.2; extra == 'messaging'
+Provides-Extra: cron
+Provides-Extra: slack
+Requires-Dist: slack-bolt==1.30.0; extra == 'slack'
+Requires-Dist: slack-sdk==3.44.1; extra == 'slack'
+Requires-Dist: aiohttp==3.14.3; extra == 'slack'
+Provides-Extra: matrix
+Requires-Dist: mautrix[encryption]==0.21.1; (sys_platform == 'linux') and extra == 'matrix'
+Requires-Dist: aiosqlite==0.22.1; (sys_platform == 'linux') and extra == 'matrix'
+Requires-Dist: asyncpg==0.31.0; (sys_platform == 'linux') and extra == 'matrix'
+Requires-Dist: aiohttp-socks==0.11.0; (sys_platform == 'linux') and extra == 'matrix'
+Requires-Dist: aiohttp==3.14.3; (sys_platform == 'linux') and extra == 'matrix'
+Provides-Extra: wecom
+Requires-Dist: defusedxml==0.7.1; extra == 'wecom'
+Provides-Extra: tts-premium
+Requires-Dist: elevenlabs==1.59.0; extra == 'tts-premium'
+Provides-Extra: voice
+Requires-Dist: faster-whisper==1.2.1; ((platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or platform_system != 'Darwin')) and extra == 'voice'
+Requires-Dist: sounddevice==0.5.5; extra == 'voice'
+Requires-Dist: numpy==2.4.3; extra == 'voice'
+Provides-Extra: wake
+Requires-Dist: pyopen-wakeword==1.1.0; ((platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin')) and extra == 'wake'
+Requires-Dist: sherpa-onnx==1.13.8; extra == 'wake'
+Requires-Dist: sherpa-onnx-core==1.13.8; extra == 'wake'
+Requires-Dist: sentencepiece==0.2.2; extra == 'wake'
+Requires-Dist: pypinyin==0.55.0; extra == 'wake'
+Requires-Dist: pvporcupine==4.0.3; extra == 'wake'
+Requires-Dist: sounddevice==0.5.5; extra == 'wake'
+Requires-Dist: numpy==2.4.3; extra == 'wake'
+Provides-Extra: telegram
+Requires-Dist: python-telegram-bot[webhooks]==22.8; extra == 'telegram'
+Provides-Extra: discord
+Requires-Dist: discord.py[voice]==2.7.1; extra == 'discord'
+Provides-Extra: stt-whisper
+Requires-Dist: faster-whisper==1.2.1; ((platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or platform_system != 'Darwin')) and extra == 'stt-whisper'
+Provides-Extra: audio-io
+Requires-Dist: sounddevice==0.5.5; extra == 'audio-io'
+Requires-Dist: numpy==2.4.3; extra == 'audio-io'
+Provides-Extra: silk
+Requires-Dist: pilk==0.2.4; extra == 'silk'
+Provides-Extra: wake-openwakeword
+Requires-Dist: pyopen-wakeword==1.1.0; ((platform_machine != 'ARM64' or sys_platform != 'win32') and (platform_machine != 'x86_64' or sys_platform != 'darwin')) and extra == 'wake-openwakeword'
+Provides-Extra: wake-sherpa
+Requires-Dist: sherpa-onnx==1.13.8; extra == 'wake-sherpa'
+Requires-Dist: sherpa-onnx-core==1.13.8; extra == 'wake-sherpa'
+Requires-Dist: sentencepiece==0.2.2; extra == 'wake-sherpa'
+Requires-Dist: pypinyin==0.55.0; extra == 'wake-sherpa'
+Provides-Extra: wake-porcupine
+Requires-Dist: pvporcupine==4.0.3; extra == 'wake-porcupine'
+Provides-Extra: google-chat
+Requires-Dist: google-cloud-pubsub==2.39.2; (platform_machine != 'ARM64' or sys_platform != 'win32') and extra == 'google-chat'
+Provides-Extra: doc-extract
+Requires-Dist: firecrawl-anydoc==0.2.4; extra == 'doc-extract'
+Provides-Extra: trace-upload
+Requires-Dist: huggingface-hub==1.24.0; extra == 'trace-upload'
+Provides-Extra: mem0
+Requires-Dist: mem0ai==2.0.10; (platform_machine != 'ARM64' or sys_platform != 'win32') and extra == 'mem0'
+Provides-Extra: vision
+Provides-Extra: pty
+Provides-Extra: mcp
+Requires-Dist: mcp==2.0.0; extra == 'mcp'
+Requires-Dist: httpx2==2.7.0; extra == 'mcp'
+Requires-Dist: starlette==1.3.1; extra == 'mcp'
+Provides-Extra: nemo-relay
+Provides-Extra: sms
+Requires-Dist: aiohttp==3.14.3; extra == 'sms'
+Provides-Extra: teams
+Requires-Dist: microsoft-teams-apps==2.0.13.4; extra == 'teams'
+Requires-Dist: aiohttp==3.14.3; extra == 'teams'
+Provides-Extra: computer-use
+Requires-Dist: mcp==2.0.0; extra == 'computer-use'
+Requires-Dist: httpx2==2.7.0; extra == 'computer-use'
+Requires-Dist: starlette==1.3.1; extra == 'computer-use'
+Provides-Extra: acp
+Requires-Dist: agent-client-protocol==0.9.0; extra == 'acp'
+Provides-Extra: mistral
+Requires-Dist: mistralai==2.4.8; extra == 'mistral'
+Provides-Extra: otlp
+Requires-Dist: opentelemetry-sdk==1.39.1; extra == 'otlp'
+Requires-Dist: opentelemetry-exporter-otlp-proto-http==1.39.1; extra == 'otlp'
+Provides-Extra: langfuse
+Requires-Dist: langfuse==4.15.2; extra == 'langfuse'
+Provides-Extra: bedrock
+Requires-Dist: boto3==1.42.89; extra == 'bedrock'
+Provides-Extra: vertex
+Requires-Dist: google-auth==2.55.1; extra == 'vertex'
+Provides-Extra: azure-identity
+Requires-Dist: azure-identity==1.25.3; extra == 'azure-identity'
+Provides-Extra: termux
+Requires-Dist: python-telegram-bot[webhooks]==22.8; extra == 'termux'
+Requires-Dist: hermes-agent[cron]; extra == 'termux'
+Requires-Dist: hermes-agent[mcp]; extra == 'termux'
+Requires-Dist: hermes-agent[acp]; extra == 'termux'
+Provides-Extra: termux-all
+Requires-Dist: hermes-agent[termux]; extra == 'termux-all'
+Requires-Dist: hermes-agent[google]; extra == 'termux-all'
+Requires-Dist: hermes-agent[sms]; extra == 'termux-all'
+Requires-Dist: hermes-agent[web]; extra == 'termux-all'
+Requires-Dist: hermes-agent[pty]; extra == 'termux-all'
+Provides-Extra: dingtalk
+Requires-Dist: dingtalk-stream==0.24.3; extra == 'dingtalk'
+Requires-Dist: alibabacloud-dingtalk==2.2.42; extra == 'dingtalk'
+Requires-Dist: qrcode==7.4.2; extra == 'dingtalk'
+Provides-Extra: feishu
+Requires-Dist: lark-oapi==1.6.8; extra == 'feishu'
+Requires-Dist: qrcode==7.4.2; extra == 'feishu'
+Provides-Extra: google
+Requires-Dist: google-api-python-client==2.194.0; extra == 'google'
+Requires-Dist: google-auth==2.55.1; extra == 'google'
+Requires-Dist: google-auth-oauthlib==1.3.1; extra == 'google'
+Requires-Dist: google-auth-httplib2==0.3.1; extra == 'google'
+Requires-Dist: httplib2==0.32.0; extra == 'google'
+Requires-Dist: pyasn1==0.6.4; extra == 'google'
+Provides-Extra: youtube
+Requires-Dist: youtube-transcript-api==1.2.4; extra == 'youtube'
+Provides-Extra: web
+Requires-Dist: fastapi==0.133.1; extra == 'web'
+Requires-Dist: uvicorn==0.41.0; extra == 'web'
+Requires-Dist: starlette==1.3.1; extra == 'web'
+Requires-Dist: python-multipart==0.0.32; extra == 'web'
+Provides-Extra: all
+Requires-Dist: hermes-agent[cron]; extra == 'all'
+Requires-Dist: hermes-agent[pty]; extra == 'all'
+Requires-Dist: hermes-agent[mcp]; extra == 'all'
+Requires-Dist: hermes-agent[uvloop]; extra == 'all'
+Requires-Dist: hermes-agent[sms]; extra == 'all'
+Requires-Dist: hermes-agent[acp]; extra == 'all'
+Requires-Dist: hermes-agent[google]; extra == 'all'
+Requires-Dist: hermes-agent[web]; extra == 'all'
+Requires-Dist: hermes-agent[youtube]; extra == 'all'
