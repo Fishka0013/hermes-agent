@@ -14,6 +14,25 @@ import pytest
 from tools.tts_tool import text_to_speech_tool
 
 
+@pytest.fixture(autouse=True)
+def _sec3_model_root(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(root),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
+    return root
+
+
 def test_output_path_rejects_traversal_escape():
     """A path with '..' components must be rejected before any provider work."""
     result = json.loads(text_to_speech_tool(
@@ -69,7 +88,9 @@ def test_rejected_control_char_path_yields_no_collectible_media(tmp_path, suffix
     unvalidated directive. The error envelope must contain nothing the gateway auto-append
     collector or the model-echo parser can turn into an attachment."""
     from gateway.platforms.base import BasePlatformAdapter
-    from gateway.run import _collect_auto_append_media_tags
+    from unittest.mock import patch
+    with patch("pm.environments.payload_venv", return_value=None):
+        from gateway.run import _collect_auto_append_media_tags
 
     result = text_to_speech_tool(text="hello", output_path=str(tmp_path / "a.mp3") + suffix)
     payload = json.loads(result)
@@ -84,7 +105,9 @@ def test_media_directive_in_path_is_rejected_before_any_echo(tmp_path):
     """A MEDIA:-anchored segment needs no control characters: ``file_path`` and the traversal
     error text both echo the raw path. The directive check fires before those echoes; a bare
     ``media:`` without a path anchor stays a legal filename."""
-    from gateway.run import _collect_auto_append_media_tags
+    from unittest.mock import patch
+    with patch("pm.environments.payload_venv", return_value=None):
+        from gateway.run import _collect_auto_append_media_tags
     from tools.tts_tool import _resolve_output_base
 
     for bad in (str(tmp_path / "decoy" / "MEDIA:/tmp/evil.txt"), "../MEDIA:/tmp/evil.txt",

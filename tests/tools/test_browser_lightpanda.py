@@ -5,6 +5,31 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _sec3_isolated_model_env(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    # Browser command env composition consults PM's store. Keep that lookup
+    # inside the test sandbox rather than probing the live install manifest.
+    pm_store = tmp_path / "pm-store"
+    pm_store.mkdir(exist_ok=True)
+    monkeypatch.setattr("pm.paths.store_root", lambda: pm_store)
+    monkeypatch.setattr("pm.paths.writable_store_root", lambda: pm_store)
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(root),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
+    return root
 from tools import browser_tool_lifecycle as bt_lifecycle
 from tools import browser_tool_lightpanda_fallback as bt_lightpanda_fallback
 from tools import browser_tool_session as bt_session

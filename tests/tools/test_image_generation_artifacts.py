@@ -3,6 +3,24 @@ import json
 import threading
 from types import SimpleNamespace
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _sec3_model_root(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(root),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
+    return root
+
 
 def test_postprocess_adds_agent_visible_image_for_active_ssh_env(monkeypatch, tmp_path):
     from tools import image_generation_tool

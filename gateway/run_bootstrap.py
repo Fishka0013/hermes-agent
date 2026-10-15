@@ -251,7 +251,33 @@ def _start_gateway_claim_pid_file(force: bool = False) -> bool:
     return True
 
 
-async def _start_gateway_start_control_socket(runner):
+def _start_gateway_start_core_runtime():
+    """Bootstrap the accepted bounded Core V1 mac/status Level-A runtime.
+
+    Core failure is isolated from Gateway availability; no alternate binding is substituted.
+    """
+    try:
+        from agent.core.gateway_runtime import CoreGatewayRuntime
+        from gateway.control_socket import build_status_payload
+        from hermes_constants import get_hermes_home
+        runtime = CoreGatewayRuntime.bootstrap(
+            home=Path(get_hermes_home()), status_provider=build_status_payload)
+    except Exception as exc:
+        logger.warning("Core V1 mac/status runtime unavailable; Gateway continues without core-status: %s", exc)
+        return None
+    return runtime
+
+
+def _close_gateway_core_runtime(core_runtime) -> None:
+    if core_runtime is None:
+        return
+    try:
+        core_runtime.close()
+    except Exception:
+        logger.debug("Core V1 runtime close failed", exc_info=True)
+
+
+async def _start_gateway_start_control_socket(runner, core_runtime=None):
     """Start the gateway control socket (identify/status/pause-for-update); None when unavailable."""
     from gateway.run import (asyncio, logger, os, threading)
     import atexit
@@ -328,16 +354,22 @@ async def _start_gateway_start_control_socket(runner):
             except concurrent.futures.TimeoutError:
                 return {"multiplex": True, "pending": True, "served_profiles": runner.served_profile_names()}
 
-        _control_server = GatewayControlServer(
-            verb_handlers={"pause-for-update": _pause_for_update_handler, "identify": _identify_runtime,
-                           "rescan-profiles": _rescan_profiles_handler,
-                           "migrate-profile-identity": migrate_profile_identity_verb(runner),
-                           "unserve-profile": unserve_profile_verb(runner),
-                           "serve-profile": serve_profile_verb(runner),
-                           "purge-profile-identity": purge_profile_identity_verb(runner),
-                           # A plugin installed/enabled by another process loads now and re-wires the
-                           # live adapters' handlers (#87770); tools/prompt still wait for the next session.
-                           "reload-plugins": reload_plugins_verb(runner, _main_loop)})
+        verb_handlers = {
+            "pause-for-update": _pause_for_update_handler,
+            "identify": _identify_runtime,
+            "rescan-profiles": _rescan_profiles_handler,
+            "migrate-profile-identity": migrate_profile_identity_verb(runner),
+            "unserve-profile": unserve_profile_verb(runner),
+            "serve-profile": serve_profile_verb(runner),
+            "purge-profile-identity": purge_profile_identity_verb(runner),
+            # A plugin installed/enabled by another process loads now and re-wires the
+            # live adapters' handlers (#87770); tools/prompt still wait for the next session.
+            "reload-plugins": reload_plugins_verb(runner, _main_loop),
+        }
+        if core_runtime is not None:
+            from agent.core.gateway_runtime import CORE_STATUS_CONTROL_VERB
+            verb_handlers[CORE_STATUS_CONTROL_VERB] = core_runtime.control_status
+        _control_server = GatewayControlServer(verb_handlers=verb_handlers)
         _control_server.ticket_store = runner.session_ticket_store
         if not await _control_server.start():
             _control_server = None
@@ -719,6 +751,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         return False
 
     _control_server = None
+    _core_runtime = None
     runner = None
     _planned_stop_watcher_stop = None
     try:
@@ -778,7 +811,8 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
 
         # Right after the PID claim (which makes us authoritative). Fatal: local clients attach only
         # with tickets minted on this listener, so startup aborts without it.
-        _control_server = await _start_gateway_start_control_socket(runner)
+        _core_runtime = _start_gateway_start_core_runtime()
+        _control_server = await _start_gateway_start_control_socket(runner, _core_runtime)
         if _control_server is None:
             raise RuntimeError("gateway session bootstrap control listener unavailable")
         # Now the attach channel answers: republish the host record with the settled served set.
@@ -852,5 +886,6 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 _planned_stop_watcher_stop.set()
             if _control_server is not None:
                 await _control_server.stop()
+            _close_gateway_core_runtime(_core_runtime)
             remove_pid_file()
             release_gateway_runtime_lock()

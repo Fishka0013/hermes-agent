@@ -1134,6 +1134,11 @@ def validate_media_delivery_path(path: str, session_key: str = "") -> Optional[s
     if not candidate:
         return None
     try:
+        from agent.model_file_policy import validate_model_local_path_syntax
+        validate_model_local_path_syntax(candidate)
+    except Exception:
+        return None
+    try:
         expanded = Path(os.path.expanduser(candidate))
     except (OSError, RuntimeError, ValueError):
         # expanduser raises ValueError("embedded null byte") for a ~\x00 path.
@@ -1146,7 +1151,15 @@ def validate_media_delivery_path(path: str, session_key: str = "") -> Optional[s
         resolved = _resolve_path(expanded, strict=True)
     if resolved is None or not resolved.is_file():
         return None
-    # Cache / operator allowlist is trusted unconditionally, regardless of mode.
+    # SEC-3: model-origin outbound local paths must be inside MODEL_WORKSPACE_ROOT
+    # regardless of legacy media strictness/cache/operator allowlists. Internal
+    # artifacts are published into the model workspace before they reach here.
+    try:
+        from agent.model_file_policy import resolve_model_read_path
+        resolved = resolve_model_read_path(str(resolved))
+    except Exception:
+        return None
+    # Legacy roots remain secondary compatibility checks, never a wider authority.
     for root in _media_delivery_allowed_roots():
         resolved_root = _resolve_path(root, expand=True)
         if resolved_root is not None and _path_is_within(resolved, resolved_root):

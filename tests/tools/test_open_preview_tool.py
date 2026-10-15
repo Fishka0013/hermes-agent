@@ -44,21 +44,20 @@ def test_existing_directory_is_an_error_not_success(tmp_path):
     result = json.loads(op.open_preview_tool(str(folder)))
 
     assert "error" in result
-    assert "director" in result["error"].lower()
+    assert "Local file/path preview is disabled" in result["error"]
     assert result.get("success") is not True
     assert emitted == []
 
 
-def test_existing_file_still_opens(tmp_path):
+def test_existing_file_is_blocked(tmp_path):
     emitted = _capture_emits()
     path = tmp_path / "notes.md"
     path.write_text("hi", encoding="utf-8")
 
     result = json.loads(op.open_preview_tool(str(path)))
 
-    assert result["success"] is True
-    assert result["url"] == str(path)
-    assert emitted == [("preview.open", {"url": str(path), "label": ""})]
+    assert "Local file/path preview is disabled" in result["error"]
+    assert emitted == []
 
 
 def test_https_url_is_not_treated_as_a_directory():
@@ -78,16 +77,45 @@ def test_file_uri_directory_is_an_error(tmp_path):
     result = json.loads(op.open_preview_tool(uri))
 
     assert "error" in result
-    assert "director" in result["error"].lower()
+    assert "Local file/path preview is disabled" in result["error"]
     assert emitted == []
 
 
-def test_missing_path_still_emits(tmp_path):
-    """Reject only existing directories — a missing path is the renderer's call."""
+def test_missing_path_is_blocked(tmp_path):
+    """Path authority is rejected before filesystem or renderer resolution."""
     emitted = _capture_emits()
     missing = tmp_path / "no-such-folder"
 
     result = json.loads(op.open_preview_tool(str(missing)))
 
-    assert result["success"] is True
-    assert emitted == [("preview.open", {"url": str(missing), "label": ""})]
+    assert "Local file/path preview is disabled" in result["error"]
+    assert emitted == []
+
+
+@pytest.mark.parametrize("target", [
+    "file:///etc/passwd", "FiLe:///etc/passwd", "file%3A%2F%2F%2Fetc%2Fpasswd",
+    "/tmp/index.html", "./index.html", "../index.html", "~/index.html", "index.html",
+    "data:text/html,local", "javascript:document.body.innerText",
+])
+def test_registered_preview_blocks_local_targets_before_emitter(target):
+    from model_tools import handle_function_call
+    emitted = _capture_emits()
+    result = json.loads(handle_function_call(
+        "desktop_preview", {"action": "open", "url": target}, task_id="sec3-preview"))
+    assert "Local file/path preview is disabled" in result["error"]
+    assert emitted == []
+
+
+@pytest.mark.parametrize("target,expected", [
+    ("https://example.com", "https://example.com"),
+    ("www.example.com", "https://www.example.com"),
+    ("localhost:3000", "http://localhost:3000"),
+])
+def test_registered_preview_preserves_http_targets(target, expected):
+    from model_tools import handle_function_call
+    emitted = _capture_emits()
+    result = json.loads(handle_function_call(
+        "desktop_preview", {"action": "open", "url": target, "label": "test"},
+        task_id="sec3-preview"))
+    assert result["success"] is True and result["url"] == expected
+    assert emitted == [("preview.open", {"url": expected, "label": "test"})]

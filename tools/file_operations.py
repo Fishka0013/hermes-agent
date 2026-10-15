@@ -567,7 +567,8 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
     def _atomic_write(self, path: str, content: str) -> ExecuteResult:
         """Write ``content`` atomically: stdin → temp file in the SAME directory →
         ``mv -f`` (same-FS rename; cross-device ``mv`` is copy+unlink, NOT atomic).
-        ``mkdir -p`` folded in. Exit 0 = swap happened; non-zero = original intact.
+        Missing parent descendants are created one level at a time; existing absolute
+        ancestors are never re-mkdir'd. Exit 0 = swap happened; non-zero = original intact.
 
         Symlink targets are resolved first (replacing the link would orphan the
         target) and the temp dir recomputed from the RESOLVED target. Existing
@@ -582,9 +583,11 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
         tmpl = self._escape_shell_arg(".hermes-tmp.XXXXXX")
         script = (
             "set -e; "
-            # One shell script, fully quoted. Notes: - `mkdir -p "$d"` is folded in here so the parent
-            # directory is created in the same subprocess that writes the temp file — saves one entire
-            # subprocess spawn vs. a separate mkdir call. - `mktemp` lands the temp in the target's own dir
+            # One shell script, fully quoted. Parent creation stays in this subprocess, but deliberately
+            # does NOT use `mkdir -p` on an absolute path: macOS sandbox-exec treats mkdir attempts against
+            # already-existing forbidden ancestors (e.g. /Users) as writes and denies them before reaching an
+            # allowed descendant. The helper below first stops at the nearest existing directory, then creates
+            # only missing descendants one level at a time. - `mktemp` lands the temp in the target's own dir
             # (-p) so `mv` is same-FS atomic; we fall back to a PID-stamped name if the backend lacks mktemp
             # (rare; busybox/macOS/Linux all ship it). - `chmod --reference` is GNU-only, so we read the
             # octal mode with `stat` (GNU `-c%a` or BSD `-f%Lp`) and `chmod` it explicitly; silent
@@ -602,7 +605,14 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
             'rt="$(readlink -f "$t" 2>/dev/null || realpath "$t" 2>/dev/null || true)"; '
             '[ -n "$rt" ] && { t="$rt"; d="$(dirname "$t")"; }; '
             "fi; "
-            'mkdir -p "$d"; '
+            '__hermes_mkdir_missing() { '
+            '[ -d "$1" ] && return 0; '
+            'p="${1%/*}"; [ -n "$p" ] || p="/"; '
+            '[ "$p" != "$1" ] || return 1; '
+            '__hermes_mkdir_missing "$p" || return $?; '
+            'mkdir -- "$1"; '
+            '}; '
+            '__hermes_mkdir_missing "$d"; '
             'tmp="$(mktemp -p "$d" ' + tmpl + ' 2>/dev/null '
             '|| mktemp "$d/.hermes-tmp.$$.XXXXXX" 2>/dev/null '
             '|| { tmp="$d/.hermes-tmp.$$"; : > "$tmp" && echo "$tmp"; })"; '
@@ -906,10 +916,21 @@ class ShellFileOperations(LintMixin, SearchMixin, FileOperations):
     def _native_read_enabled(self) -> bool:
         """Whether ``read_file`` and ``search_files`` may bypass the shell: only POSIX + ``LocalEnvironment``
         (file is on this host, path already native; Windows keeps the shell path since
-        file_operations holds Git-Bash-style paths there). ``HERMES_NATIVE_FILE_READ=0``
-        turns the fast path off."""
-        flag = os.environ.get("HERMES_NATIVE_FILE_READ", "1").strip().lower()
-        if flag in ("0", "false", "no", "off"):
+        file_operations holds Git-Bash-style paths there). Native host reads bypass
+        LocalEnvironment's child-process sandbox, so the fast path is opt-in only:
+        ``HERMES_NATIVE_FILE_READ=1`` enables it."""
+        flag = os.environ.get("HERMES_NATIVE_FILE_READ", "0").strip().lower()
+        if flag not in ("1", "true", "yes", "on"):
+            return False
+        # A model child can mutate its own env, and launchctl can carry user-session
+        # environment across future launches. Never let either mechanism opt the live
+        # supervised Gateway into host-native reads: ordinary model-facing file ops
+        # must keep crossing the child-process sandbox boundary.
+        try:
+            from tools.process_registry import _is_supervised_gateway_process
+            if _is_supervised_gateway_process():
+                return False
+        except Exception:
             return False
         # Same "is this env the local host" test the LSP path uses; isinstance is
         # microseconds and self.env is never rebound, so nothing to memoize.

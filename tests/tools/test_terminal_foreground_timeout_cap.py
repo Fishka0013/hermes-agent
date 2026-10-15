@@ -35,9 +35,18 @@ class TestForegroundTimeoutCap:
         import time
         from tools.terminal_tool import terminal_tool, FOREGROUND_MAX_TIMEOUT
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hh"))
-        marker = tmp_path / "ran"
-        with patch("tools.terminal_tool._get_env_config", return_value=_make_env_config(cwd=str(tmp_path))), \
+        home = tmp_path / "hh"
+        home.mkdir()
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        # Real model terminals require an explicit workspace; keep host config
+        # outside it rather than using terminal.cwd as a security boundary.
+        (home / "config.yaml").write_text(json.dumps({
+            "security": {"model_workspace_root": str(workspace)},
+        }))
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        marker = workspace / "ran"
+        with patch("tools.terminal_tool._get_env_config", return_value=_make_env_config(cwd=str(workspace))), \
              patch("tools.terminal_tool._start_cleanup_thread"), \
              patch("tools.terminal_tool._check_all_guards", return_value={"approved": True}):
             result = json.loads(terminal_tool(command=f"echo x >> {marker}", timeout=9999))

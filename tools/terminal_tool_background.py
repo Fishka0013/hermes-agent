@@ -1,5 +1,6 @@
 """Background-process launch path: ``terminal(background=true)`` spawns a tracked
-process via the process registry (Popen locally, ``env.execute`` in a sandbox),
+process via the process registry (``env.execute`` for model jobs; native Popen
+only for the existing private control-plane path),
 stamps gateway routing metadata for completion / watch-pattern notifications and
 returns the JSON result. Lazy ``tools.terminal_tool`` imports keep the origin's
 monkeypatch points authoritative.
@@ -87,14 +88,32 @@ def _stamp_gateway_routing(proc_session, get_session_env) -> None:
 
 
 def _spawn(process_registry, *, env, env_type, command, cwd, effective_task_id, task_id,
-           session_key, effective_pty, persist_on_release: bool = False):
+           session_key, effective_pty, persist_on_release: bool = False,
+           _host_local: bool = False):
     common = dict(command=command, cwd=cwd, task_id=effective_task_id,
                   owner_task_id=task_id or effective_task_id, session_key=session_key,
                   persist_on_release=persist_on_release)
-    if env_type == "local":
+    confinement = getattr(env, "confinement", None)
+    if env_type == "local" and (confinement is not None or _host_local):
+        # _host_local remains a private host API; model arguments never forward it.
+        # Model-native spawning is admitted only with the inherited kernel sandbox.
+        if confinement is not None:
+            common["confinement"] = confinement
         return process_registry.spawn_local(
             env_vars=env.env if hasattr(env, 'env') else None, use_pty=effective_pty, **common)
-    return process_registry.spawn_via_env(env=env, **common)
+    if env_type == "local" and effective_pty:
+        raise PermissionError(
+            "Native PTY is unavailable for ordinary model use until it inherits "
+            "the approved workspace execution perimeter. Use foreground execution."
+        )
+    # A native local Popen chooses a separate login shell and bypasses the
+    # LocalEnvironment execution envelope. The existing env transport keeps
+    # model background jobs under the same fence as foreground commands.
+    session = process_registry.spawn_via_env(env=env, **common)
+    if (getattr(session, "exited", False)
+            and getattr(session, "completion_reason", None) == "failed_start"):
+        raise RuntimeError("Background launch failed: " + getattr(session, "output_buffer", ""))
+    return session
 
 
 def _apply_async_support(proc_session, result_data, notify_on_complete, watch_patterns):
@@ -148,6 +167,7 @@ def spawn_background_process(
     heartbeat_seconds: int = 0,
     persist_on_release: bool = False,
     mounted_host: Optional[str] = None,
+    _host_local: bool = False,
 ) -> str:
     """Spawn *command* as a tracked background process and return the JSON result.
 
@@ -169,6 +189,7 @@ def spawn_background_process(
             process_registry, env=env, env_type=env_type, command=command, cwd=effective_cwd,
             effective_task_id=effective_task_id, task_id=task_id, session_key=session_key,
             effective_pty=effective_pty, persist_on_release=persist_on_release,
+            _host_local=_host_local,
         )
         result_data = {"output": "Background process started", "session_id": proc_session.id,
                        "pid": proc_session.pid, "exit_code": 0, "error": None}

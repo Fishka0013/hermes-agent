@@ -6,7 +6,7 @@ import pytest
 import shutil
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from tests.tools.file_ops_fakes import READ_SENTINEL_RE, compound_read_output
 from tools.environments.local import _find_bash, LocalEnvironment
@@ -666,6 +666,29 @@ class TestAtomicWriteNewFilePermissions:
             f"Expected mode {expected_mode:04o} (umask {test_umask:04o}), "
             f"got {actual_mode:04o}"
         )
+
+    def test_nested_parent_creation_avoids_absolute_mkdir_p(self, tmp_path):
+        """Regression: sandboxed absolute writes must not re-mkdir existing / ancestors."""
+        ops = ShellFileOperations(make_real_subprocess_env(str(tmp_path)))
+        dest = tmp_path / "deep" / "nested" / "new.txt"
+        atomic_commands = []
+        real_exec = ops._exec
+
+        def capture(command, *args, **kwargs):
+            if kwargs.get("stdin_data") is not None:
+                atomic_commands.append(command)
+            return real_exec(command, *args, **kwargs)
+
+        with patch.object(ops, "_exec", side_effect=capture):
+            result = ops.write_file(str(dest), "nested\n")
+
+        assert result.error is None, f"write failed: {result.error}"
+        assert dest.read_text() == "nested\n"
+        assert len(atomic_commands) == 1
+        atomic = atomic_commands[0]
+        assert 'mkdir -p "$d"' not in atomic
+        assert "__hermes_mkdir_missing" in atomic
+        assert 'mkdir -- "$1"' in atomic
 
     def test_overwrite_still_preserves_existing_mode(self, tmp_path):
         """The new-file branch must not disturb the overwrite path's

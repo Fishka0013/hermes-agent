@@ -124,7 +124,9 @@ def _coerce_task_schemas(
 # Per-task image ceiling: enough for screenshots/mocks while keeping the child's first request small.
 _MAX_TASK_IMAGES = 8
 
-def _normalize_task_images(task: dict, i: int) -> tuple[Optional[list[str]], Optional[str]]:
+def _normalize_task_images(
+    task: dict, i: int, *, task_id: Optional[str] = None
+) -> tuple[Optional[List[str]], Optional[str]]:
     """``(cleaned_list_or_None, None)`` for a task's optional ``images`` (local paths, http(s) or data: URLs), else
     ``(None, error)``. A bare string is wrapped into a one-entry list (small models emit scalars for arrays)."""
     raw = task.get("images")
@@ -134,28 +136,44 @@ def _normalize_task_images(task: dict, i: int) -> tuple[Optional[list[str]], Opt
         raw = [raw]
     if not isinstance(raw, list):
         return None, f"Task {i} 'images' must be an array of local file paths or http(s) URLs."
-    cleaned: list[str] = []
+    if len(raw) > _MAX_TASK_IMAGES:
+        return None, (
+            f"Task {i} has {len(raw)} images; the per-task limit is {_MAX_TASK_IMAGES}. "
+            "Trim to the images the child actually needs to see."
+        )
+    cleaned: List[str] = []
     for item in raw:
         if not isinstance(item, str) or not item.strip():
             return None, f"Task {i} 'images' entries must be non-empty strings (local file paths or http(s) URLs)."
-        cleaned.append(item.strip())
-    if len(cleaned) > _MAX_TASK_IMAGES:
-        return None, (
-            f"Task {i} has {len(cleaned)} images; the per-task limit is {_MAX_TASK_IMAGES}. "
-            "Trim to the images the child actually needs to see."
-        )
+        item = item.strip()
+        if item.lower().startswith(("http://", "https://", "data:")):
+            cleaned.append(item)
+            continue
+        try:
+            from pathlib import Path
+            from agent.model_file_policy import resolve_model_read_path, validate_resolution_base
+            if Path(item).expanduser().is_absolute():
+                cleaned.append(str(resolve_model_read_path(item)))
+                continue
+            from tools.file_tools_paths import _resolve_base_dir
+            base = validate_resolution_base(
+                str(_resolve_base_dir(task_id or "default", container_paths=False)))
+            cleaned.append(str(resolve_model_read_path(
+                item, resolution_base=base, scope_base=base)))
+        except Exception as exc:
+            return None, f"Task {i} image path blocked: {exc}"
     return (cleaned or None), None
 
 def _coerce_task_images(
-    task_list: list[dict[str, Any]], images: Optional[list[str]]
-) -> tuple[list[Optional[list[str]]], Optional[str]]:
+    task_list: List[Dict[str, Any]], images: Optional[List[str]], *, task_id: Optional[str] = None
+) -> tuple[List[Optional[List[str]]], Optional[str]]:
     """Per-task validated image lists; a malformed list fails the whole call before any child spawns. The legacy
     top-level ``images`` applies to a single task only, like ``output_schema``."""
     task_images: list[Optional[list[str]]] = []
     for i, task in enumerate(task_list):
         if task.get("images") is None and len(task_list) == 1 and images is not None:
             task = {**task, "images": images}
-        cleaned, err = _normalize_task_images(task, i)
+        cleaned, err = _normalize_task_images(task, i, task_id=task_id)
         if err:
             return [], err
         task_images.append(cleaned)

@@ -148,6 +148,10 @@ def _read_script_for_guard(env: Any, guard_cwd: str, script_path: str, max_bytes
     into bogus paths and crashes the scanner, so it yields None."""
     if env is None:
         return None
+    if getattr(env, "confinement", None) is not None:
+        # Never open model-named scripts in the privileged host. The kernel
+        # checks the actual opened vnode, including concurrent symlink changes.
+        return _read_script_in_environment(env, script_path, max_bytes, cwd=guard_cwd)
     try:
         local_path = Path(script_path).expanduser()
         if not local_path.is_absolute():
@@ -160,13 +164,19 @@ def _read_script_for_guard(env: Any, guard_cwd: str, script_path: str, max_bytes
                     return None if b"\x00" in data else data.decode("utf-8", errors="replace")
     except Exception:
         pass
+    return _read_script_in_environment(env, script_path, max_bytes)
+
+
+def _read_script_in_environment(env: Any, script_path: str, max_bytes: int,
+                                *, cwd: str | None = None) -> Optional[str]:
     # Remote backend: bound the read at the source with `head -c` so an
     # oversized binary never crosses the wire (an unbounded `cat` once
     # pinned the gateway's tool thread for 30+ min on a shlex scan). One
     # byte over budget is enough for lifecycle_guard to fail closed. The
     # `< path` redirect keeps leading-dash paths out of argv.
     try:
-        result = env.execute(f"head -c {max_bytes + 1} < {shlex.quote(script_path)}")
+        result = env.execute(f"head -c {max_bytes + 1} < {shlex.quote(script_path)}",
+                             **({"cwd": cwd} if cwd is not None else {}))
         if result.get("returncode", -1) == 0:
             output = result.get("output", "")
             return None if output and "\x00" in output else output

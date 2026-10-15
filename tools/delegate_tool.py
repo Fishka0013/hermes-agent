@@ -490,7 +490,8 @@ def delegate_task(
     max_iterations: Optional[int] = None, role: Optional[str] = None, background: Optional[bool] = None,
     output_schema: Optional[dict[str, Any]] = None, images: Optional[list[str]] = None, action: Optional[str] = None,
     subagent_id: Optional[str] = None, message: Optional[str] = None, parent_agent=None,
-    credentials_cfg: Optional[dict[str, Any]] = None,
+    credentials_cfg: Optional[Dict[str, Any]] = None,
+    task_id: Optional[str] = None,
 ) -> str:
     """Spawn child agents (single ``goal`` or ``tasks=[...]`` batch) or control running ones. ``action``
     list/steer/stop run synchronously and bypass the pause gate, depth limit and async dispatch. ``role`` is legacy
@@ -550,7 +551,7 @@ def delegate_task(
     if not err:
         task_schemas, err = _coerce_task_schemas(task_list, output_schema)
     if not err:
-        task_images, err = _coerce_task_images(task_list, images)
+        task_images, err = _coerce_task_images(task_list, images, task_id=task_id)
     if err:
         return tool_error(err)
     err = _oneshot_spawn_budget(parent_agent, len(task_list))
@@ -805,7 +806,7 @@ registry.register(
         max_iterations=args.get("max_iterations"), role=args.get("role"),
         background=_model_background_value(args, kw.get("parent_agent")), output_schema=args.get("output_schema"),
         images=args.get("images"), action=args.get("action"), subagent_id=args.get("subagent_id"), message=args.get("message"),
-        parent_agent=kw.get("parent_agent"),
+        parent_agent=kw.get("parent_agent"), task_id=kw.get("task_id"),
     ),
     check_fn=check_delegate_requirements,
     emoji="🔀",

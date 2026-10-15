@@ -1,6 +1,7 @@
 """File attachment uploads retain their bytes in the shared profile namespace."""
 
 import base64
+import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
@@ -12,6 +13,10 @@ from tui_gateway import server
 
 @pytest.fixture
 def sessions(tmp_path, monkeypatch):
+    home, workspace = tmp_path / "profile", tmp_path / "workspace"
+    home.mkdir()
+    workspace.mkdir()
+    (home / "config.yaml").write_text(json.dumps({"security": {"model_workspace_root": str(workspace)}}))
     records = {
         sid: {
             "profile_home": str(tmp_path / "profile"),
@@ -67,8 +72,11 @@ def test_concurrent_same_name_uploads_keep_distinct_bytes_and_refs(
         assert path.suffix == target.suffix
         assert result["name"] == path.name
         assert result["uploaded"] is True
-        assert result["ref_path"] == str(path)
-        assert result["ref_text"] == f"@file:`{path}`"
+        published = tmp_path / "workspace" / result["ref_path"]
+        assert published.is_relative_to(tmp_path / "workspace")
+        assert published.read_bytes() == data
+        assert published.with_name(published.name + ".receipt.json").is_file()
+        assert result["ref_text"] == f"@file:{result['ref_path']}"
     assert len(set(paths)) == len(payloads)
     assert set(target.parent.iterdir()) == set(paths)
 

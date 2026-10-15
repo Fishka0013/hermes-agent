@@ -6,6 +6,7 @@ import functools
 import importlib.util
 import inspect
 import logging
+import sys
 import shutil
 import subprocess
 from typing import Any, Dict, Optional
@@ -133,7 +134,16 @@ def _modal_unavailable_reason(modal_state: dict[str, Any]) -> tuple[str, str]:
 # --- Environment builders. Signature: (*, image, cwd, timeout, cc, task_id, ssh_config, local_config, host_cwd)
 # (env_type is only forwarded to the plugin-registry fallback, not to the built-in builders.)
 def _build_local_env(*, cwd, timeout, local_config=None, **_):
-    return _LocalEnvironment(cwd=cwd, timeout=timeout, persistent=(local_config or {}).get("persistent", True))
+    persistent = (local_config or {}).get("persistent", True)
+    if sys.platform == "darwin" and (local_config or {}).get("model_terminal", True):
+        from tools.environments.macos_confinement import MacOSTerminalConfinement
+        confinement = MacOSTerminalConfinement()
+        try:
+            return _LocalEnvironment(cwd=cwd, timeout=timeout, persistent=persistent, confinement=confinement)
+        except Exception:
+            confinement.cleanup()
+            raise
+    return _LocalEnvironment(cwd=cwd, timeout=timeout, persistent=persistent)
 
 
 def _build_docker_env(*, image, cwd, timeout, cc, task_id, host_cwd, **_):

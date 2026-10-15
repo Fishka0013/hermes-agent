@@ -103,17 +103,13 @@ def _spill_full_stdout(stdout_text: str) -> Optional[str]:
 
 
 def check_sandbox_requirements() -> bool:
-    """check_fn: available unless the vercel_sandbox backend fails its own checks."""
-    if not SANDBOX_AVAILABLE:
-        return False
-    try:
-        from tools.terminal_tool import _get_env_config
-        from tools.terminal_tool_backends import _check_vercel_sandbox_requirements
-        config = _get_env_config()
-    except Exception:
-        logger.debug("Could not resolve terminal config for execute_code availability", exc_info=True)
-        return False
-    return config.get("env_type") != "vercel_sandbox" or _check_vercel_sandbox_requirements(config)
+    """Unrestricted Python kernels are not an ordinary model filesystem fence.
+
+    RPC tool filtering and approval do not confine direct open/import/subprocess
+    operations. Keep the current internal kernel helpers, but withhold the model
+    capability until a separately validated execution perimeter exists.
+    """
+    return False
 
 
 # ---- hermes_tools.py code generator ----
@@ -947,8 +943,7 @@ EXECUTE_CODE_SCHEMA = build_execute_code_schema()
 
 
 def _execute_code_handler(args: dict, **kwargs) -> str:
-    """Redirect misdirected calls (terminal's ``command`` arg, non-string ``code``) with an
-    actionable error before dispatching to ``execute_code``."""
+    """Keep argument diagnostics, then reject model code before any kernel spawn."""
     if "code" not in args and "command" in args:
         logger.warning("execute_code received 'command' instead of the required 'code' argument")
         return tool_error("execute_code received a 'command' parameter, but it requires "
@@ -958,8 +953,16 @@ def _execute_code_handler(args: dict, **kwargs) -> str:
     if code is not None and not isinstance(code, str):
         return tool_error(f"execute_code received a {type(code).__name__} in 'code', but it "
                           "requires Python source as a string. Retry as execute_code(code=\"...\").")
-    return execute_code(code=code or "", task_id=kwargs.get("task_id"),
-                        enabled_tools=kwargs.get("enabled_tools"), reset=bool(args.get("reset", False)))
+    if not code or not code.strip():
+        return tool_error(
+            "execute_code requires a non-empty 'code' parameter containing Python "
+            "source. Use terminal(command=...) for shell commands."
+        )
+    return tool_error(
+        "execute_code is unavailable for ordinary model use: unrestricted Python "
+        "is not confined by MODEL_WORKSPACE_ROOT. Use the terminal or file tools "
+        "within their approved perimeter."
+    )
 
 
 registry.register(

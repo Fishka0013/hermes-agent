@@ -258,14 +258,13 @@ def _browser_use_api_key_set() -> bool:
 
 
 def is_browser_use_cli_mode() -> bool:
-    """True when the Browser Use CLI replaces the built-in browser stack. Browser Use mode is the DEFAULT:
-    unset ``browser.backend`` ("") enables it whenever browser-harness is importable (a core dependency);
-    ``browser.backend: off`` keeps the built-in browser_* tools. Camofox always falls back to the built-in
-    tools (Firefox, custom HTTP API, no CDP surface for the harness)."""
-    if _camofox_active():
-        return False
-    backend = get_browser_backend()
-    return backend == _BACKEND_KEY if backend else (is_legacy_browser_use_cloud_config(_read_browser_cfg()) or _find_cli() is not None)
+    """Ordinary sessions retain bounded browser tools.
+
+    The current harness executes arbitrary host Python without the terminal's
+    execution perimeter. Configuration or installed dependencies cannot grant
+    this separate authority to the ordinary browser toolset.
+    """
+    return False
 
 
 def default_downgrade_notice() -> Optional[str]:
@@ -944,20 +943,22 @@ BROWSER_EXEC_SCHEMA = {
 }
 
 
-# browser_exec is additionally gated at tool-definition time — sessions whose toolsets
-# lack ``terminal`` never see it (model_tools._compute_tool_definitions). check_fn only
-# answers "is Browser Use mode configured"; surface policy lives with the session.
+# The low-level harness remains an internal utility. Ordinary model dispatch
+# cannot reach it, including forged requests for a tool absent from the schema.
 from tools.registry import registry
+
+def _model_browser_exec_refusal(args, **kw):
+    from tools.registry import tool_error
+    return tool_error(
+        "browser_exec is unavailable to ordinary model tools: the host-Python "
+        "harness has no approved execution fence. Use the bounded browser tools.")
+
 
 registry.register(
     name="browser_exec",
     toolset="browser-use",
     schema=BROWSER_EXEC_SCHEMA,
-    handler=lambda args, **kw: browser_exec(
-        code=args.get("code", ""), session=args.get("session", "") or "",
-        timeout_s=args.get("timeout_s", _DEFAULT_TIMEOUT_S), task_id=kw.get("task_id"),
-        local=bool(args.get("local", False)),
-    ),
+    handler=_model_browser_exec_refusal,
     check_fn=is_browser_use_cli_mode,
     dynamic_schema_overrides=_dynamic_schema_overrides,
     emoji="🌐",

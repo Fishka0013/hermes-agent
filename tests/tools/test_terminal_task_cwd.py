@@ -130,7 +130,7 @@ def test_background_command_prefers_recorded_session_cwd_over_init_time_cwd(monk
             self.calls = []
             self.pending_watchers = []
 
-        def spawn_local(self, **kwargs):
+        def spawn_via_env(self, **kwargs):
             self.calls.append(kwargs)
             return SimpleNamespace(id="proc_test", pid=1234)
 

@@ -1042,7 +1042,8 @@ def _(rid, params: dict) -> dict:
     try:
         stored_path, uploaded = _stage_session_file_attachment(
             session, raw_path=raw, data_url=data_url, name=name)
-        ref_path = _attachment_ref_path(session, stored_path)
+        model_path = _publish_session_attachment_for_model(session, stored_path)
+        ref_path = _attachment_ref_path(session, model_path)
         return _ok(rid, {
             "attached": True, "name": stored_path.name, "path": str(stored_path),
             "ref_path": ref_path, "ref_text": f"@file:{_format_ref_value(ref_path)}",
