@@ -30,7 +30,7 @@ _SYSTEM_COMMANDS = (
     "/usr/bin/awk", "/usr/bin/grep", "/usr/bin/mktemp", "/usr/bin/env",
     "/usr/bin/true", "/usr/bin/head", "/usr/bin/base64", "/usr/bin/sed",
     "/usr/bin/cut", "/usr/bin/wc", "/usr/bin/tail", "/usr/bin/stat",
-    "/usr/bin/readlink", "/usr/bin/dirname", "/usr/bin/od",
+    "/usr/bin/readlink", "/usr/bin/dirname", "/usr/bin/od", "/usr/bin/find",
 )
 _SYSTEM_LIBRARIES = (
     "/usr/lib", "/System/Library",
