@@ -11,6 +11,7 @@ import json
 import os
 import secrets
 import stat
+import threading
 import time
 from dataclasses import dataclass
 from contextlib import contextmanager
@@ -24,6 +25,9 @@ class ModelFilePolicyError(PermissionError):
 
 
 _TRUST_TOKEN = object()
+_PROFILE_STAGING_LOCKS_GUARD = threading.Lock()
+_PROFILE_STAGING_LOCKS: dict[str, threading.RLock] = {}
+_PROFILE_QUOTA_LOCK_NAME = ".profile-quota.lock"
 
 
 def _security_config() -> dict[str, Any]:
@@ -314,6 +318,8 @@ def _safe_tree_bytes(root: Path) -> int:
         base_path = Path(base)
         dirs[:] = [d for d in dirs if not (base_path / d).is_symlink()]
         for name in files:
+            if name == _PROFILE_QUOTA_LOCK_NAME:
+                continue
             p = base_path / name
             try:
                 st = p.lstat()
@@ -322,6 +328,56 @@ def _safe_tree_bytes(root: Path) -> int:
             if stat.S_ISREG(st.st_mode) and not name.endswith(".receipt.json"):
                 total += st.st_size
     return total
+
+
+@contextmanager
+def _profile_staging_lock(root: Path):
+    """Serialize quota check + publication for one canonical model workspace.
+
+    The in-process lock covers threads. POSIX additionally locks the staging
+    directory itself, so no model-writable sidecar inode can be replaced while
+    another process is publishing. Windows uses a one-byte lock sidecar; an
+    open CRT handle plus ``msvcrt.locking`` supplies the cross-process fence.
+    Different workspace roots use different locks.
+    """
+    root = Path(root).resolve(strict=True)
+    lock_dir = _validated_staging_path(root / ".tmp", root=root)
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    lock_dir = _validated_staging_path(lock_dir, root=root)
+    key = os.path.normcase(str(root))
+    with _PROFILE_STAGING_LOCKS_GUARD:
+        thread_lock = _PROFILE_STAGING_LOCKS.setdefault(key, threading.RLock())
+    with thread_lock:
+        if os.name == "nt":  # pragma: no cover - exercised on Windows CI
+            lock_path = _validated_staging_path(lock_dir / _PROFILE_QUOTA_LOCK_NAME, root=root)
+            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
+            fd = os.open(lock_path, flags, 0o600)
+            try:
+                if os.fstat(fd).st_size == 0:
+                    os.write(fd, b"\0")
+                    os.fsync(fd)
+                import msvcrt
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            finally:
+                os.close(fd)
+        else:
+            import fcntl
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(lock_dir, flags)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -426,81 +482,89 @@ def publish_internal_artifact_for_model(
     )
     scope_raw = session_id or task_id or "default"
     scope = hashlib.sha256(str(scope_raw).encode("utf-8")).hexdigest()[:16]
-    scope_dir = _validated_staging_path(stage_base / scope, root=root)
-    scope_dir.mkdir(parents=True, exist_ok=True)
-    scope_dir = _validated_staging_path(scope_dir, root=root)
-    cleanup_expired_model_artifacts()
-    if _safe_tree_bytes(root / ".tmp") + size > profile_quota:
-        raise ModelFilePolicyError("profile staging quota exceeded")
-    if _safe_tree_bytes(scope_dir) + size > session_quota:
-        raise ModelFilePolicyError("task/session staging quota exceeded")
 
-    # The random basename supplies the identity. A bounded ASCII extension is
-    # only a delivery hint for existing image/audio/video/document consumers;
-    # no source basename or path authority is inherited, and mode stays 0600.
-    suffix = src.suffix.lower()
-    if not (1 < len(suffix) <= 9 and suffix.isascii() and suffix[1:].isalnum()):
-        suffix = ""
-    opaque = secrets.token_hex(20) + suffix
-    final = _validated_staging_path(scope_dir / opaque, root=root)
-    receipt_path = _validated_staging_path(final.with_name(final.name + ".receipt.json"), root=root)
-    if final.exists() or receipt_path.exists():
-        raise ModelFilePolicyError("staging destination already exists")
-    tmp = _validated_staging_path(scope_dir / f".{opaque}.{secrets.token_hex(8)}.tmp", root=root)
-    digest = hashlib.sha256()
-    copied = 0
-    with _staging_parent(final) as (final, parent_fd):
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(tmp.name if parent_fd is not None else tmp, flags, 0o600,
-                     **({"dir_fd": parent_fd} if parent_fd is not None else {}))
-        try:
-            with src.open("rb") as rf, os.fdopen(fd, "wb") as wf:
-                while True:
-                    chunk = rf.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    copied += len(chunk)
-                    if copied > max_file:
-                        raise ModelFilePolicyError("internal artifact exceeds per-file staging limit")
-                    digest.update(chunk)
-                    wf.write(chunk)
-                wf.flush()
-                os.fsync(wf.fileno())
-            _validated_staging_path(final)
-            if parent_fd is None:
-                os.replace(tmp, final)
-            else:
-                os.replace(tmp.name, final.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-        finally:
+    with _profile_staging_lock(root):
+        scope_dir = _validated_staging_path(stage_base / scope, root=root)
+        scope_dir.mkdir(parents=True, exist_ok=True)
+        scope_dir = _validated_staging_path(scope_dir, root=root)
+        cleanup_expired_model_artifacts()
+        if _safe_tree_bytes(root / ".tmp") + size > profile_quota:
+            raise ModelFilePolicyError("profile staging quota exceeded")
+        if _safe_tree_bytes(scope_dir) + size > session_quota:
+            raise ModelFilePolicyError("task/session staging quota exceeded")
+
+        # The random basename supplies the identity. A bounded ASCII extension is
+        # only a delivery hint for existing image/audio/video/document consumers;
+        # no source basename or path authority is inherited, and mode stays 0600.
+        suffix = src.suffix.lower()
+        if not (1 < len(suffix) <= 9 and suffix.isascii() and suffix[1:].isalnum()):
+            suffix = ""
+        opaque = secrets.token_hex(20) + suffix
+        final = _validated_staging_path(scope_dir / opaque, root=root)
+        receipt_path = _validated_staging_path(final.with_name(final.name + ".receipt.json"), root=root)
+        if final.exists() or receipt_path.exists():
+            raise ModelFilePolicyError("staging destination already exists")
+        tmp = _validated_staging_path(scope_dir / f".{opaque}.{secrets.token_hex(8)}.tmp", root=root)
+        digest = hashlib.sha256()
+        copied = 0
+        with _staging_parent(final) as (final, parent_fd):
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(tmp.name if parent_fd is not None else tmp, flags, 0o600,
+                         **({"dir_fd": parent_fd} if parent_fd is not None else {}))
             try:
+                with src.open("rb") as rf, os.fdopen(fd, "wb") as wf:
+                    while True:
+                        chunk = rf.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        copied += len(chunk)
+                        if copied > max_file:
+                            raise ModelFilePolicyError("internal artifact exceeds per-file staging limit")
+                        digest.update(chunk)
+                        wf.write(chunk)
+                    wf.flush()
+                    os.fsync(wf.fileno())
+                # Count the completed temp file before publication. This closes the
+                # source-size drift gap while the same profile lock is still held.
+                if _safe_tree_bytes(root / ".tmp") > profile_quota:
+                    raise ModelFilePolicyError("profile staging quota exceeded")
+                if _safe_tree_bytes(scope_dir) > session_quota:
+                    raise ModelFilePolicyError("task/session staging quota exceeded")
+                _validated_staging_path(final)
                 if parent_fd is None:
-                    tmp.unlink()
+                    os.replace(tmp, final)
                 else:
-                    os.unlink(tmp.name, dir_fd=parent_fd)
-            except FileNotFoundError:
-                pass
+                    os.replace(tmp.name, final.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            finally:
+                try:
+                    if parent_fd is None:
+                        tmp.unlink()
+                    else:
+                        os.unlink(tmp.name, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
 
-    created = time.time()
-    expires = created + ttl
-    receipt = {
-        "source_class": source.source_class,
-        "source_id": source.source_id,
-        "source_path_hash": hashlib.sha256(str(src).encode("utf-8")).hexdigest(),
-        "staged_path": str(final),
-        "size": copied,
-        "sha256": digest.hexdigest(),
-        "created_at": created,
-        "expires_at": expires,
-        "task_id": task_id,
-        "session_id": session_id,
-        "namespace": namespace,
-        "extension_hint": suffix,
-    }
-    try:
-        _atomic_json(receipt_path, receipt)
-    except Exception:
-        _validated_staging_path(final).unlink(missing_ok=True)
-        raise
-    return StagedArtifact(
-        path=final, receipt_path=receipt_path, size=copied,
-        sha256=digest.hexdigest(), created_at=created, expires_at=expires)
+        created = time.time()
+        expires = created + ttl
+        receipt = {
+            "source_class": source.source_class,
+            "source_id": source.source_id,
+            "source_path_hash": hashlib.sha256(str(src).encode("utf-8")).hexdigest(),
+            "staged_path": str(final),
+            "size": copied,
+            "sha256": digest.hexdigest(),
+            "created_at": created,
+            "expires_at": expires,
+            "task_id": task_id,
+            "session_id": session_id,
+            "namespace": namespace,
+            "extension_hint": suffix,
+        }
+        try:
+            _atomic_json(receipt_path, receipt)
+        except Exception:
+            _validated_staging_path(final).unlink(missing_ok=True)
+            raise
+        return StagedArtifact(
+            path=final, receipt_path=receipt_path, size=copied,
+            sha256=digest.hexdigest(), created_at=created, expires_at=expires)
