@@ -259,8 +259,12 @@ def test_invalid_direct_file_order_returns_structured_error():
 
 
 @pytest.mark.parametrize("blank_path", ["", " \t ", None])
-def test_handler_normalizes_blank_path_to_current_directory(monkeypatch, blank_path):
+def test_handler_normalizes_blank_path_to_current_directory(monkeypatch, tmp_path, blank_path):
     """#112424: a present-but-blank (or null) path must fall back to the documented '.' default."""
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+    configure_model_workspace(monkeypatch, tmp_path)
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    monkeypatch.setattr("tools.terminal_tool._session_cwd", {})
     captured = {}
 
     def fake_search_tool(**kwargs):
@@ -271,7 +275,7 @@ def test_handler_normalizes_blank_path_to_current_directory(monkeypatch, blank_p
 
     registry.dispatch("search_files", {"pattern": "needle", "target": "files", "path": blank_path})
 
-    assert captured["path"] == "."
+    assert captured["path"] == str(tmp_path)  # Blank means the configured model Root.
 
 
 

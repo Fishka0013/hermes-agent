@@ -18,9 +18,23 @@ DELEGATE_BLOCKED_TOOLS = frozenset(
         "memory",  # no writes to shared MEMORY.md
         "send_message",  # no cross-platform side effects
         "cronjob_manage",  # no scheduling more work in the parent's name
+        "computer_use",  # no delegated desktop/host control, regardless of parent
+        "execute_code",  # no unrestricted Python kernel or direct host imports
+        "manage_connections",  # no connector authorization or privileged provider operations
+        "discord_admin",  # no delegated server/role administration
     ]
 )
 DEFAULT_TOOLSETS = ["terminal", "file", "web"]
+# SEC-3 V1 has no trusted child-MCP capability classification. Fail closed:
+# transports and role-reserved tools stay in the explicit parent/admin contour.
+DELEGATE_PRIVILEGED_TOOLSETS = frozenset({"computer_use", "setup", "admin", "privileged", "rdc", "node_repl", "browser_vault", "code_execution"})
+
+
+def _is_privileged_child_toolset(name: str) -> bool:
+    return (name in DELEGATE_PRIVILEGED_TOOLSETS
+            or bool(TOOLSETS.get(name, {}).get("role"))
+            or _is_mcp_toolset_name(name))
+
 
 def _is_mcp_toolset_name(name: str) -> bool:
     """Return True for canonical MCP toolsets and their registered aliases."""
@@ -62,7 +76,7 @@ def _strip_blocked_tools(toolsets: list[str]) -> list[str]:
         if (resolved_tools := resolve_toolset(name, include_registry=False))
         and all(tool in DELEGATE_BLOCKED_TOOLS for tool in resolved_tools)
     }
-    return [t for t in toolsets if t not in blocked_toolset_names]
+    return [t for t in toolsets if t not in blocked_toolset_names and not _is_privileged_child_toolset(t)]
 
 def _blocked_toolsets_for_role(role: str) -> list[str]:
     """One-tool deny toolsets for the role; passed as ``disabled_toolsets`` so
@@ -70,9 +84,18 @@ def _blocked_toolsets_for_role(role: str) -> list[str]:
     blocked_names = set(DELEGATE_BLOCKED_TOOLS)
     if role == "orchestrator":
         blocked_names.discard("delegate_task")
-    return sorted(
-        name for name, defn in TOOLSETS.items() if defn.get("tools") and set(defn.get("tools", ())).issubset(blocked_names)
-    )
+    blocked = {
+        name for name, defn in TOOLSETS.items()
+        if defn.get("tools") and set(defn.get("tools", ())).issubset(blocked_names)
+    }
+    blocked.update(DELEGATE_PRIVILEGED_TOOLSETS)
+    # Canonical MCP toolsets subtract exact transport tools after composite
+    # expansion without disabling same-named ordinary built-in aliases.
+    from tools.registry import registry
+    blocked.update(entry.toolset for entry in registry.get_all_entries()
+                   if _is_mcp_toolset_name(entry.toolset))
+    blocked.update(name for name, defn in TOOLSETS.items() if defn.get("role"))
+    return sorted(blocked)
 
 def _resolve_child_toolsets(
     parent_agent, toolsets: Optional[list[str]], effective_role: str

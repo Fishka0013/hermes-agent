@@ -40,7 +40,8 @@ def kanban_home(tmp_path: Path, monkeypatch):
     """Isolated HERMES_HOME with a fresh kanban DB for each test."""
     home = tmp_path / ".hermes"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+    configure_model_workspace(monkeypatch, tmp_path, home=home)
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     kb.init_db()
     return home

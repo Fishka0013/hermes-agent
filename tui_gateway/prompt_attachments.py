@@ -154,6 +154,34 @@ def stage_image_bytes(directory, img_bytes: bytes, ext: str, *, prefix: str):
         path.unlink(missing_ok=True)
         raise
     return path
+def _publish_session_attachment_for_model(session: dict, path: Path) -> Path:
+    """Publish a user-attached runtime artifact under its owning profile's Root.
+
+    UI storage/cwd remain runtime details; neither grants model cache authority.
+    This helper is called only by trusted attachment intake, not model path tools.
+    """
+    from agent.model_file_policy import (
+        ModelFilePolicyError, make_internal_artifact_source,
+        publish_internal_artifact_for_model, resolve_model_read_path,
+    )
+    with _session_profile_runtime_scope(session):
+        try:
+            return resolve_model_read_path(path)
+        except ModelFilePolicyError:
+            source = make_internal_artifact_source(
+                path, source_class="desktop-user-attachment", source_id=path.name)
+            return publish_internal_artifact_for_model(
+                source, namespace="inbound", session_id=session.get("session_key")).path
+
+
+def _publish_turn_image_attachments(session: dict, images: list[str]) -> list[str]:
+    published = []
+    for path in images:
+        try:
+            published.append(str(_publish_session_attachment_for_model(session, Path(path))))
+        except Exception as exc:
+            logger.warning("Desktop attachment publication blocked: %s", exc)
+    return published
 
 
 def _queue_attached_image(session: dict, img_bytes: bytes, ext: str, *, prefix: str) -> Path:

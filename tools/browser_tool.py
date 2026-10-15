@@ -10,6 +10,7 @@ Sibling ``browser_tool_*`` modules hold extracted clusters.
 
 import atexit
 import json
+import re
 import logging
 import os
 import subprocess
@@ -599,7 +600,7 @@ BROWSER_TOOL_SCHEMAS = [
     },
     {
         "name": "browser_console",
-        "description": "Get browser console output and JavaScript errors from the current page. Returns console.log/warn/error/info messages and uncaught JS exceptions. Use this to detect silent JavaScript errors, failed API calls, and application warnings. Requires browser_navigate to be called first. When 'expression' is provided, evaluates JavaScript in the page context and returns the result — use this for DOM inspection, reading page state, or extracting data programmatically.",
+        "description": "Get browser console output and JavaScript errors from the current HTTP(S) page. Returns console.log/warn/error/info messages and uncaught JS exceptions. Use this to detect failed API calls and application warnings. Requires browser_navigate first. Arbitrary JavaScript evaluation is unavailable to ordinary model tools.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -607,10 +608,6 @@ BROWSER_TOOL_SCHEMAS = [
                     "type": "boolean",
                     "default": False,
                     "description": "If true, clear the message buffers after reading"
-                },
-                "expression": {
-                    "type": "string",
-                    "description": "JavaScript expression to evaluate in the page context. Runs in the browser like DevTools console — full access to DOM, window, document. Return values are serialized to JSON. Example: 'document.title' or 'document.querySelectorAll(\"a\").length'"
                 }
             },
             "required": []
@@ -701,6 +698,9 @@ def _post_redirect_block(nav_session_key: str, url: str, final_url: str, auto_lo
     ``browser.allow_private_urls``."""
     if not final_url or final_url == url:
         return None
+    if _browser_local_file_error(final_url) is not None:
+        _session._run_browser_command(nav_session_key, "open", ["about:blank"], timeout=10)
+        return json.dumps(_err("Blocked: redirect landed on a local-file target (file:)."))
     if _is_always_blocked_url(final_url):
         what = "a cloud metadata endpoint"
     elif (
@@ -745,10 +745,32 @@ def _attach_auto_snapshot(response: dict[str, Any], nav_session_key: str) -> Non
         logger.debug("Auto-snapshot after navigate failed: %s", e)
 
 
+def _browser_local_file_error(url: object) -> Optional[Dict[str, Any]]:
+    """Reject local-file targets before browser or extension routing."""
+    from urllib.parse import unquote, urlparse
+    try:
+        decoded = str(url or "").strip().strip("`").strip()
+        for _ in range(3):
+            expanded = unquote(decoded)
+            if expanded == decoded:
+                break
+            decoded = expanded
+        if ((urlparse(decoded).scheme or "").lower() == "file"
+                or decoded.lower().startswith("file:")
+                or decoded.startswith(("/", "\\", "./", "../", "~"))
+                or re.match(r"^[A-Za-z]:[\\/]", decoded)):
+            return _err("Blocked: browser local-file navigation (file:) is disabled by the ordinary-model filesystem policy.")
+    except (ValueError, TypeError):
+        return _err("Blocked: browser navigation target could not be validated safely.")
+    return None
+
+
 def browser_navigate(url: str, task_id: Optional[str] = None) -> str:
     """Navigate to ``url``; JSON with title, compact snapshot and, on first nav, stealth features.
     Hybrid routing decides BEFORE the safety checks whether this URL goes to a local sidecar
     (the cloud provider never sees it then, so the private-address checks are relaxed)."""
+    if (local_file_error := _browser_local_file_error(url)) is not None:
+        return json.dumps(local_file_error)
     url, safety_error = _secret_url_error_normalized(url)
     if safety_error is not None:
         return json.dumps(safety_error)
@@ -1289,9 +1311,10 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
         if _should_use_native_vision_fast_path():
             return _vision._native_vision_result(screenshot_path, question, annotate, result, _lp_fallback_warning)
 
-        analysis = _vision._analyze_screenshot_with_aux_llm(screenshot_path, question)
+        model_screenshot_path = _vision._publish_screenshot_for_model(screenshot_path)
+        analysis = _vision._analyze_screenshot_with_aux_llm(model_screenshot_path, question)
         response_data = {"success": True, "analysis": analysis or "Vision analysis returned no content.",
-                         "screenshot_path": str(screenshot_path)}
+                         "screenshot_path": str(model_screenshot_path)}
         _lp._copy_fallback_warning(response_data, result)
         if annotate and result.get("data", {}).get("annotations"):
             response_data["annotations"] = result["data"]["annotations"]
@@ -1302,8 +1325,12 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
         logger.warning("browser_vision failed: %s", e, exc_info=True)
         error_info = _err(f"Error during vision analysis: {e!s}")
         if screenshot_path.exists():
-            error_info["screenshot_path"] = str(screenshot_path)
-            error_info["note"] = "Screenshot was captured but vision analysis failed. You can still share it via MEDIA:<path>."
+            try:
+                model_screenshot_path = _vision._publish_screenshot_for_model(screenshot_path)
+                error_info["screenshot_path"] = str(model_screenshot_path)
+                error_info["note"] = "Screenshot was captured but vision analysis failed. You can still share it via MEDIA:<path>."
+            except Exception as publish_exc:
+                logger.warning("Could not publish failed-analysis screenshot safely: %s", publish_exc)
         _lp._copy_fallback_warning(error_info, result)
         return _dumps(error_info)
 
@@ -1359,12 +1386,70 @@ def _routed_check_fn(name: str):
     return check
 
 
+def _ordinary_page_url_probe(task_id: Optional[str]) -> str:
+    """Read URL metadata only, through the current backend's owning session."""
+    if _is_camofox_mode():
+        from tools.browser_camofox import _get_session, _post
+        session = _get_session(task_id)
+        if not session.get("tab_id"):
+            return _dumps(_err("No browser tab; call browser_navigate first."))
+        result = _post(f"/tabs/{session['tab_id']}/evaluate", body={
+            "expression": "window.location.href", "userId": session["user_id"]})
+        value = result.get("result") if isinstance(result, dict) else None
+    else:
+        effective = _last_session_key(task_id or "default")
+        result = _session._run_browser_command(
+            effective, "eval", ["window.location.href"], timeout=5, _engine_override="auto")
+        if not result.get("success"):
+            return _dumps(_err("Browser page URL could not be verified."))
+        value = (result.get("data") or {}).get("result")
+    return _dumps({"success": True, "result": _parse_eval_value(value)})
+
+
+def _ordinary_browser_page_guard(kw) -> Optional[str]:
+    """Verify the SAME authoritative controller/backend before returning page data.
+
+    URL metadata is a fixed internal query, never model-supplied JavaScript.
+    An unavailable probe fails closed; controller ownership never falls back.
+    """
+    from urllib.parse import urlparse
+    try:
+        raw = routed_browser_handler(
+            "browser_console", {"expression": "window.location.href"},
+            fallback=lambda: _ordinary_page_url_probe(kw.get("task_id")),
+            task_id=kw.get("task_id"), session_id=kw.get("session_id"))
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(payload, dict) or payload.get("error") or payload.get("success") is False:
+            raise ValueError("page URL unavailable")
+        url = payload.get("result")
+        if not isinstance(url, str) or not url:
+            raise ValueError("page URL unavailable")
+        if (blocked := _browser_local_file_error(url)) is not None:
+            return _dumps(blocked)
+        if (urlparse(url).scheme or "").lower() not in {"http", "https"} and url != "about:blank":
+            return _dumps(_err("Blocked: browser page is not an HTTP(S) target."))
+    except Exception:
+        return _dumps(_err("Browser page URL could not be verified safely; page access is blocked."))
+    return None
+
+
 def _routed_handler(name: str, fallback):
     def handler(args, **kw):
-        return record_browser_call(lambda legacy: routed_browser_handler(
+        if name == "browser_navigate":
+            if (local_file_error := _browser_local_file_error(args.get("url", ""))) is not None:
+                return _dumps(local_file_error)
+        if name == "browser_console" and args.get("expression") is not None:
+            return _dumps(_err("Arbitrary browser JavaScript evaluation is unavailable to ordinary model tools."))
+        if name != "browser_navigate":
+            if (blocked := _ordinary_browser_page_guard(kw)) is not None:
+                return blocked
+        response = record_browser_call(lambda legacy: routed_browser_handler(
             name, args, fallback=lambda: legacy(lambda: fallback(args, kw)),
             task_id=kw.get("task_id"), session_id=kw.get("session_id"),
         ), _cloud.browser_backend_name)
+        if (blocked := _ordinary_browser_page_guard(kw)) is not None:
+            return blocked
+        return response
     return handler
 
 

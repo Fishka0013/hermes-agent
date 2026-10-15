@@ -991,6 +991,7 @@ class LocalEnvironment(BaseEnvironment):
     # Commands run on the Hermes host itself — controller-side platform behavior
     # (macOS TCC pruning, etc.) legitimately applies here.
     is_local = True
+    confinement = None
 
     def _additional_profile_scoped_passthrough_names(self) -> tuple[str, ...]:
         """First-party ``BUZZ_*`` names present in the env, excluded from the shared
@@ -1003,8 +1004,11 @@ class LocalEnvironment(BaseEnvironment):
             name for name in merged
             if isinstance(name, str) and _matches_terminal_first_party_prefix(name)))
 
-    def __init__(self, cwd: str = "", timeout: int = 60, env: dict | None = None, persistent: bool = True):
-        super().__init__(cwd=_resolve_local_initial_cwd(cwd), timeout=timeout, env=env, persist_env=persistent)
+    def __init__(self, cwd: str = "", timeout: int = 60, env: dict | None = None, persistent: bool = True, confinement=None):
+        self.confinement = confinement
+        initial_cwd = (confinement.resolve_cwd(cwd) if confinement is not None
+                       else _resolve_local_initial_cwd(cwd))
+        super().__init__(cwd=initial_cwd, timeout=timeout, env=env, persist_env=persistent)
         self.init_session()
 
     def get_temp_dir(self) -> str:
@@ -1014,6 +1018,8 @@ class LocalEnvironment(BaseEnvironment):
         ``tempfile.gettempdir()``; backend env before process env so terminal.env
         overrides work. Windows: ``%TEMP%`` often has spaces that break unquoted bash,
         so always the HERMES_HOME cache dir with forward slashes (bash- and Python-valid)."""
+        if self.confinement is not None:
+            return str(self.confinement.scratch / "tmp")
         if _IS_WINDOWS:
             for key in ("TERMINAL_TEMP_DIR", "TMPDIR"):
                 candidate = self.env.get(key) or os.environ.get(key)
@@ -1075,18 +1081,21 @@ class LocalEnvironment(BaseEnvironment):
 
     def _run_bash(self, cmd_string: str, *, login: bool = False, timeout: int = 120,
                   stdin_data: str | None = None) -> subprocess.Popen:
-        bash = _find_bash()
-        # Login invocations (init_session's env snapshot) source the user's rc /
-        # custom init files so nvm/asdf/pyenv land on PATH in the snapshot.
-        if login:
-            cmd_string = _prepend_shell_init(cmd_string, _resolve_shell_init_files())
-        args = [bash, *(["-l"] if login else []), "-c", cmd_string]
-        self._recover_cwd()
+        if self.confinement is not None:
+            args, run_env, cwd = self.confinement.launch(cmd_string, self.cwd)
+        else:
+            bash = _find_bash()
+            # Trusted host shells retain their existing login/init contract.
+            if login:
+                cmd_string = _prepend_shell_init(cmd_string, _resolve_shell_init_files())
+            args = [bash, *(["-l"] if login else []), "-c", cmd_string]
+            self._recover_cwd()
+            run_env, cwd = _make_run_env(self.env), self.cwd
         proc = subprocess.Popen(
-            args, text=True, env=_make_run_env(self.env), encoding="utf-8", errors="replace",
+            args, text=True, env=run_env, encoding="utf-8", errors="replace",
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             stdin=subprocess.PIPE if stdin_data is not None else subprocess.DEVNULL,
-            start_new_session=True, cwd=self.cwd,
+            start_new_session=True, cwd=cwd, close_fds=True,
             **({"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}))
         if not _IS_WINDOWS:
             with contextlib.suppress(ProcessLookupError):
@@ -1144,6 +1153,9 @@ class LocalEnvironment(BaseEnvironment):
     def cleanup(self):
         """Clean up temp files, including orphaned atomic-write snapshots
         (``snap.tmp.<bashpid>``) a failed/interrupted mv could leave behind."""
+        if self.confinement is not None:
+            self.confinement.cleanup()
+            return
         # See #38249.
         import glob
         try:

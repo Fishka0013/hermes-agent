@@ -1380,6 +1380,51 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayPluginInjectionMixin)
         return message_text
 
     @staticmethod
+    def _stage_inbound_media_for_model(
+        event: MessageEvent, source: SessionSource, session_key: str
+    ) -> None:
+        """Publish trusted downloaded attachments into MODEL_WORKSPACE_ROOT before model exposure."""
+        urls = list(getattr(event, "media_urls", None) or [])
+        if not urls:
+            return
+        types = list(getattr(event, "media_types", None) or [])
+        inline_flags = list(getattr(event, "media_text_inlined", None) or [])
+        staged_urls, staged_types, staged_inline = [], [], []
+        from agent.model_file_policy import (
+            make_internal_artifact_source, publish_internal_artifact_for_model,
+            resolve_model_read_path,
+        )
+        source_class = f"gateway-inbound:{getattr(source, 'platform', 'unknown')}"
+        source_id = str(getattr(event, "message_id", "") or "") or None
+        for i, raw in enumerate(urls):
+            value = str(raw or "").strip()
+            if not value:
+                continue
+            if value.lower().startswith(("http://", "https://", "data:")):
+                published = value
+            else:
+                try:
+                    published = str(resolve_model_read_path(value))
+                except Exception:
+                    try:
+                        trusted = make_internal_artifact_source(
+                            value, source_class=source_class, source_id=source_id)
+                        published = str(publish_internal_artifact_for_model(
+                            trusted, namespace="inbound", task_id=session_key,
+                            session_id=session_key).path)
+                    except Exception as exc:
+                        logger.warning("Inbound attachment staging blocked %s: %s", value, exc)
+                        continue
+            staged_urls.append(published)
+            staged_types.append(types[i] if i < len(types) else "")
+            staged_inline.append(inline_flags[i] if i < len(inline_flags) else None)
+        event.media_urls = staged_urls
+        event.media_types = staged_types
+        if hasattr(event, "media_text_inlined"):
+            event.media_text_inlined = staged_inline
+
+
+    @staticmethod
     def _classify_inbound_media(
         event: MessageEvent, pending_stt_prepared: bool
     ) -> tuple[list, list, list, list]:
@@ -1641,6 +1686,10 @@ class GatewayInboundMixin(GatewayInboundHooksMixin, GatewayPluginInjectionMixin)
         self._consume_pending_native_image_paths(session_key)
 
         message_text = self._prefix_inbound_sender_context(event, source, message_text)
+        # Platform downloads/cache files are trusted runtime artifacts, not MODEL_PATH.
+        # Publish them before any note, vision route, or model-visible path is built.
+        await asyncio.to_thread(
+            self._stage_inbound_media_for_model, event, source, session_key)
         image_paths, audio_paths, audio_file_paths, video_paths = self._classify_inbound_media(event, _pending_stt_prepared)
         if image_paths:
             message_text = await self._enrich_inbound_images(source, session_key, message_text, image_paths)

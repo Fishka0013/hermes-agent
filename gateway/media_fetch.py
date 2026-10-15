@@ -97,22 +97,34 @@ def fetch_remote_media(path: str) -> Optional[str]:
     if not candidate.startswith("/") or remote_path_is_denied(candidate, remote_home):
         return None
     try:
+        # Remote transfer is not a new filesystem authority. Confine the source
+        # namespace before any provider call, then recheck the remote realpath.
+        from agent.model_file_policy import (
+            resolve_model_candidate_path, make_internal_artifact_source,
+            publish_internal_artifact_for_model,
+        )
+        candidate = str(resolve_model_candidate_path(candidate))
         # ``[ -f ]`` in fetch_file follows symlinks, so the link TARGET is what gets screened;
         # an unresolvable path fails closed rather than trusting the unresolved name.
         resolved = env.fetch_realpath(candidate)
         if resolved is None or remote_path_is_denied(resolved, remote_home):
             return None
+        resolve_model_candidate_path(resolved)
         basename = re.sub(r"[^\w.\-]", "_", posixpath.basename(resolved)) or "file"
         dest = Path(DOCUMENT_CACHE_DIR) / f"remote_{uuid.uuid4().hex[:12]}_{basename}"
         dest.parent.mkdir(parents=True, exist_ok=True)
         env.fetch_file(resolved, dest, max_bytes=_FETCH_MAX_BYTES)
+        trusted = make_internal_artifact_source(
+            dest, source_class="gateway-remote-media", source_id=basename)
+        published = publish_internal_artifact_for_model(
+            trusted, namespace="remote-media")
     except FileFetchError as exc:
         logger.warning("Remote media fetch of %s skipped: %s", _log_safe_path(candidate), exc)
         return None
     except Exception:
         logger.warning("Remote media fetch of %s failed", _log_safe_path(candidate), exc_info=True)
         return None
-    validated = validate_media_delivery_path(str(dest))
+    validated = validate_media_delivery_path(str(published.path))
     if not validated:
         dest.unlink(missing_ok=True)
         return None

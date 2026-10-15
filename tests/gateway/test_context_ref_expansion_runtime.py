@@ -196,6 +196,8 @@ async def test_at_reference_ignores_global_context_for_runtime_route_override(mo
 async def test_oversized_file_reference_reaches_gateway_as_tool_readable_path(
     tmp_path, monkeypatch
 ):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+    configure_model_workspace(monkeypatch, tmp_path)
     runner = _make_runner()
     source = _source()
     _patch_runtime_resolution(monkeypatch)

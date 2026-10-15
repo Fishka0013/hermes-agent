@@ -32,7 +32,11 @@ def _fresh_counters():
 def _write_config(text: str) -> None:
     path = get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    import hermes_yaml as yaml
+    existing = yaml.safe_load(path.read_text()) or {}
+    data = yaml.safe_load(text) or {}
+    data["security"] = existing["security"]
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
 
 
 def _png(path, size=(16, 16), noisy=False):
@@ -211,3 +215,13 @@ class TestNativeTurnDedupe:
         assert json.loads(tool_results[0])["already_in_context"] is True
         # The scope ended with the turn: a later load (after compression) embeds again.
         assert _embedded(asyncio.new_event_loop().run_until_complete(_vision_analyze_native(same, "q")))
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

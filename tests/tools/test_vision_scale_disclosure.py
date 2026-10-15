@@ -254,3 +254,13 @@ class TestVisionAnalyzeScaleDisclosure:
         note = result["scale_note"]
         assert "(100, 50)" in note
         assert "downscaled" not in note  # crop fits: no scale clause
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

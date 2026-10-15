@@ -1069,35 +1069,32 @@ def _video_to_base64_data_url(video_path: Path, mime_type: Optional[str] = None)
 async def _materialize_video(video_url: str, task_id: Optional[str], temp_paths: list) -> Path:
     """Local video path for a terminal-backend path, local file, or HTTP(S) URL. Only files created
     here are appended to ``temp_paths`` — never user-provided paths. Terminal-backend reads use the
-    shared media resolver with ``permitted=("video",)`` — the exact pipeline vision_analyze uses
-    (media-cache host reads, bounded in-sandbox exec-read, credential-read guard, 50MB cap)."""
-    from tools.image_source import (
-        ImageResolutionError, ResolveContext, _is_local_terminal_backend, resolve_image_source,
-    )
+    shared media resolver with ``permitted=("video",)`` — workspace confinement before bytes,
+    credential-read guard and 50MB ingest cap. Runtime temp copies remain private."""
+    from tools.image_source import ImageResolutionError, ResolveContext, resolve_image_source
     source = video_url.removeprefix("file://")
-    local_path = Path(os.path.expanduser(source))
     lowered = (video_url or "").strip().lower()
     path_like = bool(lowered) and not lowered.startswith(("http://", "https://", "data:"))
-    if not _is_local_terminal_backend() and path_like:
-        logger.info("Reading video source via terminal backend: %s", video_url)
+    if path_like:
+        logger.info("Reading video through the confined media resolver: %s", video_url)
         suffix = Path(source).suffix.lower()
-        if suffix not in _VIDEO_MIME_TYPES:
+        if suffix and suffix not in _VIDEO_MIME_TYPES:
             raise ValueError(_unsupported_video_format(suffix))
         try:
             resolved = await resolve_image_source(
                 video_url, ResolveContext(task_id=task_id), permitted=("video",))
         except ImageResolutionError as exc:
-            raise ValueError(f"Could not read video from terminal backend: {exc}") from exc
+            raise ValueError(f"Could not read video from configured workspace: {exc}") from exc
+        if not suffix:
+            suffix = next((ext for ext, mime in _VIDEO_MIME_TYPES.items()
+                           if mime == resolved.mime), "")
+            if not suffix:
+                raise ValueError(_unsupported_video_format(suffix))
         temp_dir = _secure_cache_dir("cache/video", "temp_video_files")
         path = temp_dir / f"terminal_video_{uuid.uuid4()}{suffix}"
         _write_private_bytes(path, resolved.data)
         temp_paths.append(path)
         return path
-    if local_path.is_file():
-        from agent.file_safety import raise_if_read_blocked
-        raise_if_read_blocked(str(local_path))
-        logger.info("Using local video file: %s", video_url)
-        return local_path
     if await _validate_image_url_async(video_url):
         blocked = check_website_access(video_url)
         if blocked:

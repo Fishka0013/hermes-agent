@@ -177,3 +177,55 @@ class TestTruncateSnapshot:
 # ---------------------------------------------------------------------------
 # _camofox_eval bug fix
 # ---------------------------------------------------------------------------
+
+
+class TestLocalFileNavigationBoundary:
+    @pytest.mark.parametrize("url", [
+        "file:///etc/passwd",
+        "FILE:///etc/passwd",
+        "file%3A%2F%2F%2Fetc%2Fpasswd",
+    ])
+    def test_direct_navigate_blocks_file_before_browser_command(self, url):
+        import json
+        from tools import browser_tool as bt
+
+        with patch("tools.browser_tool._session._run_browser_command") as run:
+            result = json.loads(bt.browser_navigate(url, task_id="sec3-file-boundary"))
+        assert result["success"] is False
+        assert "local-file" in result["error"]
+        run.assert_not_called()
+
+    @pytest.mark.parametrize("url", [
+        "file:///etc/passwd",
+        "file%3A%2F%2F%2Fetc%2Fpasswd",
+    ])
+    def test_routed_handler_blocks_before_extension_controller(self, url):
+        import json
+        from tools import browser_tool as bt
+
+        handler = bt._routed_handler(
+            "browser_navigate",
+            lambda _args, _kw: "fallback-should-not-run",
+        )
+        with patch("tools.browser_tool.routed_browser_handler") as router:
+            result = json.loads(handler({"url": url}, task_id="sec3-controller"))
+        assert result["success"] is False
+        router.assert_not_called()
+
+    def test_https_and_localhost_are_not_file_targets(self):
+        from tools import browser_tool as bt
+
+        assert bt._browser_local_file_error("https://example.com") is None
+        assert bt._browser_local_file_error("http://localhost:3000") is None
+
+    def test_post_navigation_file_target_is_blank_and_blocked(self):
+        import json
+        from tools import browser_tool as bt
+
+        with patch("tools.browser_tool._session._run_browser_command") as run:
+            result = bt._post_redirect_block(
+                "sec3-session", "https://example.com", "file:///etc/passwd", False)
+        payload = json.loads(result)
+        assert payload["success"] is False
+        assert "local-file" in payload["error"]
+        run.assert_called_once_with("sec3-session", "open", ["about:blank"], timeout=10)

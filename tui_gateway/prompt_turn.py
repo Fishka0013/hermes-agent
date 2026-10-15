@@ -700,6 +700,9 @@ def _prepare_turn_input(sid: str, session: dict, st: _TurnRun, text: Any, images
     _stage_onboarding_turn_note(sid, agent, not st.history)
     cwd = _session_cwd(session)
     _register_session_cwd(session)
+    # Persist/model-native/text image references all use approved published paths.
+    # Publication failure must never fall back to the runtime cache reference.
+    images[:] = _publish_turn_image_attachments(session, images)
     cols = session.get("cols", 80)
     streamer = make_stream_renderer(cols)
     prompt = text

@@ -34,6 +34,22 @@ from cron.scheduler import _deliver_result
 from cron.scheduler_delivery import _send_media_via_adapter
 
 
+@pytest.fixture(autouse=True)
+def _sec3_model_root(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(root),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
+    return root
+
+
 @pytest.fixture()
 def media_file(tmp_path):
     p = tmp_path / "report.pdf"

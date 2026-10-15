@@ -1086,10 +1086,11 @@ async def _run_with_agent(
     user_id=None,
     scope_id=None,
 ):
-    if config_data:
-        import hermes_yaml as yaml
-
-        (tmp_path / "config.yaml").write_text(yaml.safe_dump(config_data), encoding="utf-8")
+    import hermes_yaml as yaml
+    config_data = dict(config_data or {})
+    config_data["security"] = {**config_data.get("security", {}), "model_workspace_root": str(tmp_path)}
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(config_data), encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     fake_dotenv = types.ModuleType("dotenv")
     fake_dotenv.load_dotenv = lambda *args, **kwargs: None

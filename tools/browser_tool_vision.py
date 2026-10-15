@@ -49,6 +49,20 @@ def _lightpanda_vision_preroute(
     return True, fb_result.get("fallback_warning"), screenshot_path
 
 
+def _publish_screenshot_for_model(screenshot_path: Path) -> Path:
+    from agent.model_file_policy import (
+        make_internal_artifact_source, publish_internal_artifact_for_model,
+        resolve_model_read_path,
+    )
+    try:
+        return resolve_model_read_path(str(screenshot_path))
+    except Exception:
+        trusted = make_internal_artifact_source(
+            screenshot_path, source_class="browser-screenshot", source_id=screenshot_path.name)
+        return publish_internal_artifact_for_model(
+            trusted, namespace="browser-screenshots").path
+
+
 def _native_vision_result(
     screenshot_path: Path, question: str, annotate: bool,
     result: dict[str, Any], lp_fallback_warning: Optional[str],
@@ -66,6 +80,7 @@ def _native_vision_result(
     )
     from tools.vision_tools_history_budget import resolve_embed_target_bytes
 
+    screenshot_path = _publish_screenshot_for_model(screenshot_path)
     data_url = _resize_image_for_vision(screenshot_path, mime_type="image/png",
                                         max_base64_bytes=resolve_embed_target_bytes(),
                                         max_dimension=_EMBED_MAX_DIMENSION, force_jpeg=True)

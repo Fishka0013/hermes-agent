@@ -11,6 +11,7 @@ is perfectly capable of reading. These tests pin the contract:
 """
 
 import importlib
+from pathlib import Path
 
 import pytest
 
@@ -37,7 +38,22 @@ class TestTextDocumentNote:
         assert "read" in note.lower()
 
     @pytest.mark.asyncio
-    async def test_event_contract_marks_non_inlined_text_and_preserves_path(self):
+    async def test_event_contract_marks_non_inlined_text_and_preserves_path(self, tmp_path, monkeypatch):
+        root = tmp_path / "workspace"
+        root.mkdir()
+        monkeypatch.setattr(
+            "hermes_cli.config.get_model_file_security_config",
+            lambda: {
+                "model_workspace_root": str(root),
+                "model_staging_max_file_bytes": 50 * 1024 * 1024,
+                "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+                "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+                "model_staging_ttl_seconds": 86400,
+            },
+        )
+        raw = tmp_path / "cache" / "notes.txt"
+        raw.parent.mkdir()
+        raw.write_text("hello", encoding="utf-8")
         runner = object.__new__(GatewayRunner)
         runner.config = GatewayConfig(
             platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="fake")}
@@ -57,7 +73,7 @@ class TestTextDocumentNote:
             text="summarize this",
             message_type=MessageType.DOCUMENT,
             source=source,
-            media_urls=["/cache/notes.txt"],
+            media_urls=[str(raw)],
             media_types=["text/plain"],
             media_text_inlined=[False],
         )
@@ -69,7 +85,10 @@ class TestTextDocumentNote:
         )
 
         assert prepared is not None
-        assert "/cache/notes.txt" in prepared
+        staged = event.media_urls[0]
+        assert Path(staged).is_relative_to(root) and Path(staged).is_file()
+        assert staged in prepared
+        assert str(raw) not in prepared
         assert "included below" not in prepared
         assert "read the cached file" in prepared.lower()
 

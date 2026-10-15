@@ -12,6 +12,7 @@ import os
 import datetime
 import threading
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 # Imported lazily by _load_fal_client() (~64 ms on every CLI cold start); a test-monkeypatched
@@ -339,18 +340,40 @@ def _postprocess_image_generate_result(raw: str, task_id: str | None = None) -> 
     image = payload.get("image")
     if not isinstance(image, str) or not _looks_like_absolute_file_path(image):
         return raw
+    changed = False
+    try:
+        from agent.model_file_policy import (
+            make_internal_artifact_source, publish_internal_artifact_for_model,
+            resolve_model_read_path,
+        )
+        try:
+            model_image = str(resolve_model_read_path(image))
+        except Exception:
+            trusted = make_internal_artifact_source(
+                image, source_class="image-generation", source_id=Path(image).name)
+            model_image = str(publish_internal_artifact_for_model(
+                trusted, namespace="generated-images", task_id=task_id,
+                session_id=task_id).path)
+        if model_image != image:
+            payload["image"] = model_image
+            image = model_image
+            changed = True
+    except Exception as exc:
+        logger.warning("Could not publish generated image for model access: %s", exc)
+        return _provider_error(
+            f"Generated image could not be published safely: {exc}", "artifact_publish_failed")
     env = _active_terminal_env(task_id)
     cache_base = _agent_cache_base_for_env(env)
     if not cache_base:
-        return raw
+        return json.dumps(payload, ensure_ascii=False) if changed else raw
     try:
         from tools.credential_files import map_cache_path_to_container
         agent_path = map_cache_path_to_container(image, container_base=cache_base)
     except Exception as exc:
         logger.debug("Could not translate image cache path for backend: %s", exc)
-        return raw
+        return json.dumps(payload, ensure_ascii=False) if changed else raw
     if not agent_path or agent_path == image:
-        return raw
+        return json.dumps(payload, ensure_ascii=False) if changed else raw
     sync_manager = getattr(env, "_sync_manager", None)
     if sync_manager is not None:
         try:
@@ -742,15 +765,7 @@ def _maybe_route_managed_model(
 
 
 def _confine_source_images(image_url, reference_image_urls, task_id, *, permitted: tuple = ("image",)):
-    """Resolve path-like sources to ``data:`` URLs under a non-local terminal backend.
-
-    Routes through ``tools.image_source`` (in-sandbox exec-read, media-cache host reads,
-    credential guard) so generation obeys the same confinement as vision. URLs/data: pass
-    through; local backend is a no-op. Returns ``(image_url, reference_image_urls, error_json_or_None)``.
-    """
-    from tools.terminal_scope import terminal_env
-    if (terminal_env("TERMINAL_ENV") or "local").strip().lower() in ("", "local"):
-        return image_url, reference_image_urls, None
+    """Resolve every path-like source through MODEL_WORKSPACE_ROOT before dispatch."""
     from model_tools import _run_async
     from tools.image_source import ImageResolutionError, resolve_local_source_to_data_url
 

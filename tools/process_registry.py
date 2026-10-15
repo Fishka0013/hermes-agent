@@ -1150,7 +1150,8 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             self._running[session.id] = session
         self._write_checkpoint()
 
-    def _spawn_local_pty(self, session: ProcessSession, safe_command: str, env_vars: dict) -> ProcessSession:
+    def _spawn_local_pty(self, session: ProcessSession, safe_command: str, env_vars: dict,
+                         confined_launch=None) -> ProcessSession:
         """PTY spawn for interactive CLI tools (Codex, Claude Code, REPLs).
         Raises ImportError when no PTY backend is installed and re-raises any spawn
         failure; ``spawn_local`` falls back to pipe mode in both cases."""
@@ -1158,8 +1159,11 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             from winpty import PtyProcess as _PtyProcessCls
         else:
             from ptyprocess import PtyProcess as _PtyProcessCls
-        pty_argv = self._scope_argv(session, safe_command, session.id, "PTY")
-        pty_env = self._spawn_env(env_vars)
+        if confined_launch is None:
+            pty_argv = self._scope_argv(session, safe_command, session.id, "PTY")
+            pty_env = self._spawn_env(env_vars)
+        else:
+            pty_argv, pty_env, session.cwd = confined_launch
         if session.systemd_unit:
             pty_env = systemd_user_bus_env(pty_env)
         # A PTY is a real TTY, so pager-happy tools (git log/diff, man) WILL page and
@@ -1176,7 +1180,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
     def spawn_local(
         self, command: str, cwd: str | None = None, task_id: str = "", session_key: str = "",
         env_vars: dict | None = None, use_pty: bool = False, owner_task_id: str = "",
-        persist_on_release: bool = False) -> ProcessSession:
+        persist_on_release: bool = False, confinement=None) -> ProcessSession:
         """Spawn a background process locally (TERMINAL_ENV=local; other backends use
         spawn_via_env()). ``use_pty`` requests a pseudo-terminal via ptyprocess/pywinpty
         for interactive CLIs, falling back to a plain pipe when unavailable or failing.
@@ -1188,13 +1192,19 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         from tools.terminal_tool_sudo import _rewrite_compound_background as _rewrite_bg
 
         safe_command = _rewrite_bg(command)
-        session = self._new_session(command, task_id, owner_task_id, session_key, _resolve_safe_cwd(cwd or os.getcwd()),
+        initial_cwd = (confinement.resolve_cwd(cwd) if confinement is not None
+                       else _resolve_safe_cwd(cwd or os.getcwd()))
+        session = self._new_session(command, task_id, owner_task_id, session_key, initial_cwd,
                                     persist_on_release=persist_on_release)
         pty_scope_attempted = False
         # A worker's pipe or PTY dies with the worker (the child's next write is SIGPIPE): write to a log.
         log = worker_output_log(session.id)
+        launch_command = record_exit_command(log, safe_command) if log else safe_command
+        confined_launch = confinement.launch(launch_command, cwd) if confinement is not None else None
         if use_pty and log is None:
             try:
+                if confined_launch is not None:
+                    return self._spawn_local_pty(session, safe_command, env_vars, confined_launch)
                 return self._spawn_local_pty(session, safe_command, env_vars)
             except ImportError:
                 logger.warning("ptyprocess not installed, falling back to pipe mode")
@@ -1211,9 +1221,13 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         # Pipe path (non-PTY or PTY fallback).
         _popen_kwargs = {"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}
         unit_suffix = f"{session.id}-pipe-fallback" if pty_scope_attempted else session.id
-        spawn_argv = self._scope_argv(session, record_exit_command(log, safe_command) if log else safe_command,
-                                      unit_suffix, "Local")
-        spawn_env = self._spawn_env(env_vars)
+        if confined_launch is None:
+            spawn_argv = self._scope_argv(
+                session, record_exit_command(log, safe_command) if log else safe_command,
+                unit_suffix, "Local")
+            spawn_env = self._spawn_env(env_vars)
+        else:
+            spawn_argv, spawn_env, session.cwd = confined_launch
         if session.systemd_unit:
             spawn_env = systemd_user_bus_env(spawn_env)
         # start_new_session is REQUIRED with systemd-run --scope too: the scope does not
@@ -1226,7 +1240,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
             proc = subprocess.Popen(
                 spawn_argv, text=True, cwd=session.cwd, env=spawn_env, encoding="utf-8",
                 errors="replace", stdout=output, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                start_new_session=True, **_popen_kwargs)
+                start_new_session=True, close_fds=True, **_popen_kwargs)
         finally:
             if log:
                 os.close(output)
@@ -1277,7 +1291,7 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
     def spawn_via_env(
         self, env: Any, command: str, cwd: str | None = None, task_id: str = "", session_key: str = "",
         timeout: int = 10, owner_task_id: str = "", persist_on_release: bool = False) -> ProcessSession:
-        """Spawn a background process inside a non-local backend's sandbox.
+        """Spawn a background process through the owning environment's envelope.
         The command is wrapped to capture its in-sandbox PID and redirect output to a
         log file that later execute() calls poll. No live pipe or stdin, but it runs in
         the correct sandbox context. ``persist_on_release`` keeps the process out of
@@ -1287,11 +1301,16 @@ class ProcessRegistry(ProcessTerminationMixin, ProcessCheckpointMixin, ProcessOu
         temp_dir = self._env_temp_dir(env)
         log_path, pid_path, exit_path = (f"{temp_dir}/hermes_bg_{session.id}.{ext}" for ext in ("log", "pid", "exit"))
         q = shlex.quote
+        completion_driver = (
+            f"bash -lc {q(command)}; "
+            f"rc=$?; printf '%s\\n' \"$rc\" > {q(exit_path)}")
+        # Protect the completion writer as well as the command from the
+        # short-lived transport shell's exit. Brace the launch so A&&B& does
+        # not background the setup/driver group and lose its exit receipt.
         bg_command = (
-            f"mkdir -p {q(temp_dir)} && "
-            f"( nohup bash -lc {q(command)} > {q(log_path)} 2>&1; "
-            f"rc=$?; printf '%s\\n' \"$rc\" > {q(exit_path)} ) & "
-            f"echo $! > {q(pid_path)} && cat {q(pid_path)}")
+            f"{{ [ -d {q(temp_dir)} ] || mkdir -p {q(temp_dir)}; }} && {{ "
+            f"nohup bash -c {q(completion_driver)} > {q(log_path)} 2>&1 < /dev/null & "
+            f"echo $! > {q(pid_path)} && cat {q(pid_path)}; }}")
         try:
             result = env.execute(bg_command, timeout=timeout, rewrite_compound_background=False)
             output = result.get("output", "").strip()

@@ -11724,6 +11724,25 @@ def test_image_attach_accepts_unquoted_screenshot_path_with_spaces(monkeypatch):
     assert len(server._sessions["sid"]["attached_images"]) == 1
 
 
+def _attachment_profile(home, root, *, workspace_storage=False):
+    """Real profile authority, independent of runtime attachment storage/cwd."""
+    home.mkdir(parents=True, exist_ok=True)
+    config = {"security": {"model_workspace_root": str(root)}}
+    if workspace_storage:
+        config["attachments"] = {"storage": "workspace"}
+    (home / "config.yaml").write_text(json.dumps(config), encoding="utf-8")
+
+
+def _published_file_ref(result, root, cwd):
+    """Resolve the model reference and prove publication kept runtime storage separate."""
+    ref = Path(result["ref_path"])
+    target = ref if ref.is_absolute() else cwd / ref
+    assert target.resolve().is_relative_to(root.resolve())
+    assert target.is_file()
+    assert result["ref_text"] == f"@file:{server._format_ref_value(result['ref_path'])}"
+    return target
+
+
 def test_file_attach_uploads_remote_file_into_session_workspace(monkeypatch, tmp_path):
     """Remote case: client path doesn't exist on gateway → decode data_url bytes.
 
@@ -11733,6 +11752,7 @@ def test_file_attach_uploads_remote_file_into_session_workspace(monkeypatch, tmp
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     home = tmp_path / "home"
+    _attachment_profile(home, workspace)
     fake_cli = types.ModuleType("cli")
     fake_cli._detect_file_drop = lambda raw: None
     fake_cli._split_path_input = lambda raw: (raw, "")
@@ -11759,7 +11779,9 @@ def test_file_attach_uploads_remote_file_into_session_workspace(monkeypatch, tmp
         assert resp["result"]["attached"] is True
         assert resp["result"]["uploaded"] is True
         assert resp["result"]["path"] == str(stored)
-        assert resp["result"]["ref_text"] == f"@file:{stored}"
+        published = _published_file_ref(resp["result"], workspace, workspace)
+        assert published != stored
+        assert published.read_bytes() == stored.read_bytes()
         assert stored.read_text(encoding="utf-8-sig") == "hello world"
     finally:
         server._sessions.pop("sid", None)
@@ -11770,6 +11792,7 @@ def test_file_attach_copies_gateway_visible_file_outside_workspace(monkeypatch, 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     home = tmp_path / "home"
+    _attachment_profile(home, workspace)
     source = tmp_path / "outside.txt"
     source.write_text("outside workspace", encoding="utf-8")
     fake_cli = types.ModuleType("cli")
@@ -11792,7 +11815,9 @@ def test_file_attach_copies_gateway_visible_file_outside_workspace(monkeypatch, 
         stored = home / "attachments" / "outside.txt"
         assert resp["result"]["attached"] is True
         assert resp["result"]["uploaded"] is True
-        assert resp["result"]["ref_text"] == f"@file:{stored}"
+        published = _published_file_ref(resp["result"], workspace, workspace)
+        assert published != stored
+        assert published.read_bytes() == source.read_bytes()
         assert stored.read_text(encoding="utf-8-sig") == "outside workspace"
     finally:
         server._sessions.pop("sid", None)
@@ -11809,7 +11834,9 @@ def test_file_attach_uses_in_workspace_file_without_copying(monkeypatch, tmp_pat
     fake_cli._split_path_input = lambda raw: (raw, "")
     fake_cli._resolve_attachment_path = lambda raw: source
 
-    server._sessions["sid"] = _session(cwd=str(workspace))
+    home = tmp_path / "home"
+    _attachment_profile(home, workspace)
+    server._sessions["sid"] = _session(cwd=str(workspace), profile_home=str(home))
     monkeypatch.setitem(sys.modules, "cli", fake_cli)
 
     try:
@@ -11860,14 +11887,18 @@ def test_file_attach_errors_when_unresolvable_and_no_bytes(monkeypatch, tmp_path
 
 def test_file_attach_quotes_ref_with_spaces(monkeypatch, tmp_path):
     """Staged names with spaces must be backtick-quoted so the @file: ref parses."""
-    workspace = tmp_path / "workspace"
+    workspace = tmp_path / "workspace with spaces"
     workspace.mkdir()
+    root = tmp_path / "approved root with spaces"
+    root.mkdir()
+    home = tmp_path / "home"
+    _attachment_profile(home, root)
     fake_cli = types.ModuleType("cli")
     fake_cli._detect_file_drop = lambda raw: None
     fake_cli._split_path_input = lambda raw: (raw, "")
     fake_cli._resolve_attachment_path = lambda raw: None
 
-    server._sessions["sid"] = _session(cwd=str(workspace), profile_home=str(tmp_path / "home"))
+    server._sessions["sid"] = _session(cwd=str(workspace), profile_home=str(home))
     monkeypatch.setitem(sys.modules, "cli", fake_cli)
 
     try:
@@ -11885,7 +11916,9 @@ def test_file_attach_quotes_ref_with_spaces(monkeypatch, tmp_path):
 
         stored = tmp_path / "home" / "attachments" / "my exam schedule.csv"
         assert resp["result"]["attached"] is True
-        assert resp["result"]["ref_text"] == f"@file:`{stored}`"
+        published = _published_file_ref(resp["result"], root, workspace)
+        assert published != stored
+        assert resp["result"]["ref_text"] == f"@file:`{published}`"
         assert stored.read_text(encoding="utf-8-sig") == "a,b\n"
     finally:
         server._sessions.pop("sid", None)
@@ -11903,7 +11936,7 @@ def test_file_attach_workspace_storage_follows_the_owning_profiles_config(monkey
     workspace_a.mkdir()
     home_a = tmp_path / "home-a"
     home_a.mkdir()
-    (home_a / "config.yaml").write_text("attachments:\n  storage: workspace\n", encoding="utf-8")
+    _attachment_profile(home_a, workspace_a, workspace_storage=True)
 
     def fake_resolve(raw):
         return None
@@ -11945,6 +11978,7 @@ def test_file_attach_workspace_storage_follows_the_owning_profiles_config(monkey
         workspace_b.mkdir()
         home_b = tmp_path / "home-b"
         home_b.mkdir()
+        _attachment_profile(home_b, workspace_b)
         server._sessions["sid-b"] = _session(cwd=str(workspace_b), profile_home=str(home_b))
         resp = attach(
             "sid-b",
@@ -11958,6 +11992,9 @@ def test_file_attach_workspace_storage_follows_the_owning_profiles_config(monkey
         staged_b = home_b / "attachments" / "report.txt"
         assert resp["result"]["path"] == str(staged_b)
         assert staged_b.read_text(encoding="utf-8") == "hello"
+        published_b = _published_file_ref(resp["result"], workspace_b, workspace_b)
+        assert published_b != staged_b
+        assert published_b.read_bytes() == staged_b.read_bytes()
         assert not (workspace_b / ".hermes").exists()
     finally:
         server._sessions.pop("sid-a", None)
@@ -11973,7 +12010,9 @@ def test_file_attach_workspace_storage_falls_back_for_non_local_workspace(monkey
     """
     home = tmp_path / "home"
     home.mkdir()
-    (home / "config.yaml").write_text("attachments:\n  storage: workspace\n", encoding="utf-8")
+    root = tmp_path / "local-approved-root"
+    root.mkdir()
+    _attachment_profile(home, root, workspace_storage=True)
     remote_cwd = str(tmp_path / "remote-host" / "agent-a")  # does not exist here
     fake_cli = types.ModuleType("cli")
     fake_cli._detect_file_drop = lambda raw: None
@@ -12001,6 +12040,9 @@ def test_file_attach_workspace_storage_falls_back_for_non_local_workspace(monkey
         assert resp["result"]["attached"] is True
         assert resp["result"]["path"] == str(stored)
         assert stored.read_text(encoding="utf-8") == "hello"
+        published = _published_file_ref(resp["result"], root, Path(remote_cwd))
+        assert published != stored
+        assert published.read_bytes() == stored.read_bytes()
     finally:
         server._sessions.pop("sid", None)
 
@@ -17998,10 +18040,12 @@ def test_browser_manage_status_falls_back_to_config_cdp_url(monkeypatch):
     assert {k: resp["result"][k] for k in ("connected", "url")} == {"connected": True, "url": "http://lan:9222"}
 
 
-def test_browser_manage_use_swaps_the_profiles_browser_tools_for_new_agents(monkeypatch, tmp_path):
-    """Desktop/TUI ``/browser use [off]``: the target profile's ``browser.backend`` flips, ``status``
-    reports it, and the tool surface a NEW agent resolves swaps (stale check_fn verdicts dropped).
-    ``profile`` scopes the write: the launch profile's config stays untouched."""
+def test_browser_manage_use_persists_profile_without_unfenced_model_authority(monkeypatch, tmp_path):
+    """A profile's backend preference cannot enable unrestricted model Python.
+
+    Profile-scoped persistence remains live even while ordinary browser_exec
+    is withheld by SEC-3, independently of whether the host harness is installed.
+    """
     from hermes_cli.config import read_raw_config
     from hermes_constants import get_hermes_home
     from tools import browser_use_cli
@@ -18015,8 +18059,8 @@ def test_browser_manage_use_swaps_the_profiles_browser_tools_for_new_agents(monk
 
     assert manage(action="use", enabled=False)["browser_use"] is False
     assert manage(action="status")["browser_use"] is False and not exec_offered()
-    assert manage(action="use")["browser_use"] is True
-    assert read_raw_config()["browser"]["backend"] == "browser-use" and exec_offered()
+    assert manage(action="use")["browser_use"] is False
+    assert read_raw_config()["browser"]["backend"] == "browser-use" and not exec_offered()
 
     other_home = tmp_path / "profiles" / "other"
     other_home.mkdir(parents=True)
@@ -21327,7 +21371,7 @@ def test_persist_user_message_stays_a_string_for_text_mode(tmp_path):
     assert override == f"what is this?\n@image:{img}"
 
 
-def test_native_vision_turn_persists_a_renderable_image_ref(tmp_path):
+def test_native_vision_turn_persists_a_renderable_image_ref(tmp_path, monkeypatch):
     """End to end through the real session-store flush: whichever image input
     mode the turn used, the durable row carries an ``@image:`` ref the desktop
     can render after a restart."""
@@ -21346,6 +21390,11 @@ def test_native_vision_turn_persists_a_renderable_image_ref(tmp_path):
             "0557bfabd40000000049454e44ae426082"
         )
     )
+    home = tmp_path / "vision-profile"
+    home.mkdir()
+    (home / "config.yaml").write_text(json.dumps({"security": {"model_workspace_root": str(img_dir)}}))
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     native_parts, skipped = build_native_content_parts("what is in this photo?", [str(img)])
     assert not skipped
 

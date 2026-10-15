@@ -29,6 +29,8 @@ def _route_spy(monkeypatch):
                 "tool_call_id": tool_call_id,
             }
         )
+        if action == "browser_console" and args == {"expression": "window.location.href"}:
+            return '{"success": true, "result": "https://example.test"}'
         return fallback()
 
     from tools import browser_tool
@@ -66,8 +68,9 @@ def test_every_browser_registry_handler_routes_through_wrapper(_route_spy):
         args = {"url": "https://example.test", "ref": "@e1", "text": "hi"}
         result = handler(dict(args), task_id="task-fixture", session_id="session-fixture")
         assert result is not None
-        assert len(_route_spy) == 1, f"{name} did not route through the wrapper"
-        route = _route_spy[0]
+        routes = [r for r in _route_spy if r["args"] != {"expression": "window.location.href"}]
+        assert len(routes) == 1, f"{name} did not route through the wrapper"
+        route = routes[0]
         assert route["action"] == name
         assert route["task_id"] == "task-fixture"
         assert route["session_id"] == "session-fixture"
@@ -75,13 +78,9 @@ def test_every_browser_registry_handler_routes_through_wrapper(_route_spy):
 
 
 
-def test_browser_cdp_handler_routes_through_wrapper(_route_spy):
+def test_browser_cdp_model_handler_refuses_before_wrapper(_route_spy):
     handler = registry.get_entry("browser_cdp").handler
     args = {"method": "Target.getTargets", "params": {"filter": []}}
     result = handler(dict(args), task_id="task-fixture", session_id="session-fixture")
-    assert result == "legacy-cdp"
-    route = _route_spy[0]
-    assert route["action"] == "browser_cdp"
-    assert route["args"] == args
-    assert route["task_id"] == "task-fixture"
-    assert route["session_id"] == "session-fixture"
+    assert "unavailable to ordinary model tools" in result
+    assert _route_spy == []

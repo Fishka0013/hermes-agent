@@ -1306,9 +1306,62 @@ SEARCH_FILES_SCHEMA = {
 }
 
 
+def _model_task_base(task_id: str) -> Path:
+    """A task resolution base cannot grant authority beyond the profile perimeter."""
+    from agent.model_file_policy import validate_resolution_base
+    return validate_resolution_base(str(_resolve_base_dir(task_id, container_paths=False)))
+
+
+def _model_read_target(path: str, task_id: str, *, allow_directory: bool = False) -> str:
+    from agent.model_file_policy import resolve_model_read_path
+    if Path(_expand_tilde(path)).is_absolute():
+        return str(resolve_model_read_path(path, allow_directory=allow_directory))
+    base = _model_task_base(task_id)
+    return str(resolve_model_read_path(path, allow_directory=allow_directory,
+                                       resolution_base=base, scope_base=base))
+
+
+def _model_write_target(path: str, task_id: str) -> str:
+    from agent.model_file_policy import resolve_model_write_path
+    if Path(_expand_tilde(path)).is_absolute():
+        return str(resolve_model_write_path(path))
+    base = _model_task_base(task_id)
+    return str(resolve_model_write_path(path, resolution_base=base, scope_base=base))
+
+
+def _resolve_model_v4a_patch(patch: str, task_id: str) -> str:
+    """Confine targets and directory entries without changing symlink edit semantics."""
+    collected = _collect_v4a_header_paths(patch)
+    if isinstance(collected, str):
+        from agent.model_file_policy import ModelFilePolicyError
+        raise ModelFilePolicyError(json.loads(collected).get("error", "invalid patch path"))
+
+    def _header_path(raw):
+        # Canonical target confinement still rejects links pointing outside Root.
+        # Keep the entry spelling: upstream Delete/Move must operate on the link,
+        # while Update follows it. Both the entry parent and target are confined.
+        from agent.model_file_policy import resolve_model_entry_path
+        base = None if Path(_expand_tilde(raw)).is_absolute() else _model_task_base(task_id)
+        return str(resolve_model_entry_path(raw, resolution_base=base, scope_base=base))
+
+    def _single(match):
+        return f"{match.group(1)}{_header_path(match.group(3).strip())}"
+
+    def _move(match):
+        src = _header_path(match.group(2).strip())
+        dst = _header_path(match.group(3).strip())
+        return f"{match.group(1)}{src} -> {dst}"
+
+    return _V4A_MOVE_HEADER_RE.sub(_move, _V4A_SINGLE_HEADER_RE.sub(_single, patch))
+
+
 def _handle_read_file(args, **kw):
     tid = kw.get("task_id") or "default"
-    return read_file_tool(path=args.get("path", ""), offset=args.get("offset", 1), limit=args.get("limit", DEFAULT_READ_LIMIT), task_id=tid)
+    try:
+        path = _model_read_target(args.get("path", ""), tid)
+    except Exception as exc:
+        return tool_error(str(exc))
+    return read_file_tool(path=path, offset=args.get("offset", 1), limit=args.get("limit", DEFAULT_READ_LIMIT), task_id=tid)
 
 
 def _handle_write_file(args, **kw):
@@ -1333,8 +1386,12 @@ def _handle_write_file(args, **kw):
         )
     from hermes_cli.observability.shared_metrics_harness import record_file_edit
 
+    try:
+        resolved_path = _model_write_target(args["path"], tid)
+    except Exception as exc:
+        return tool_error(str(exc))
     return record_file_edit("write_file", "whole_file", lambda: write_file_tool(
-        path=args["path"], content=args["content"], task_id=tid,
+        path=resolved_path, content=args["content"], task_id=tid,
         cross_profile=bool(args.get("cross_profile", False)),
         session_id=kw.get("session_id"),
     ))
@@ -1345,10 +1402,18 @@ def _handle_patch(args, **kw):
 
     tid = kw.get("task_id") or "default"
     mode = args.get("mode", "replace")
+    path, patch_content = args.get("path"), args.get("patch")
+    try:
+        if mode == "replace" and path:
+            path = _model_write_target(path, tid)
+        elif mode == "patch" and isinstance(patch_content, str):
+            patch_content = _resolve_model_v4a_patch(patch_content, tid)
+    except Exception as exc:
+        return tool_error(str(exc))
     return record_file_edit("patch", mode, lambda: patch_tool(
-        mode=mode, path=args.get("path"),
+        mode=mode, path=path,
         old_string=args.get("old_string"), new_string=args.get("new_string"),
-        replace_all=args.get("replace_all", False), patch=args.get("patch"), task_id=tid,
+        replace_all=args.get("replace_all", False), patch=patch_content, task_id=tid,
         cross_profile=bool(args.get("cross_profile", False)),
         session_id=kw.get("session_id"),
     ))
@@ -1364,6 +1429,10 @@ def _handle_search_files(args, **kw):
     path = args.get("path", ".")
     if path is None or (isinstance(path, str) and not path.strip()):
         path = "."
+    try:
+        path = _model_read_target(path, tid, allow_directory=True)
+    except Exception as exc:
+        return tool_error(str(exc))
     return search_tool(
         pattern=args.get("pattern", ""), target=target, path=path,
         file_glob=args.get("file_glob"), limit=args.get("limit", 50), offset=args.get("offset", 0),

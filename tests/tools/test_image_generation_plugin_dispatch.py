@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +25,19 @@ class TestPluginDispatch:
         from hermes_cli import plugins as plugins_module
         from tools import image_generation_tool
 
+        home = tmp_path / "profile-home"
+        workspace = tmp_path / "workspace"
+        home.mkdir()
+        workspace.mkdir()
+        (home / "config.yaml").write_text(
+            json.dumps({"security": {"model_workspace_root": str(workspace)}}),
+            encoding="utf-8",
+        )
+        generated = home / "cache" / "recorder.png"
+        generated.parent.mkdir()
+        generated.write_bytes(b"\x89PNG\r\n\x1a\n")
+        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
         seen = {}
 
         class _Recorder(ImageGenProvider):
@@ -36,13 +50,12 @@ class TestPluginDispatch:
 
             def generate(self, prompt, aspect_ratio="landscape", **kwargs):
                 seen.update(kwargs)
-                return {"success": True, "image": "/tmp/recorder.png", "model": "m", "prompt": prompt,
+                return {"success": True, "image": str(generated), "model": "m", "prompt": prompt,
                         "aspect_ratio": aspect_ratio, "provider": "recorder"}
 
             def list_models(self):
                 return []
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         image_gen_registry.register_provider(_Recorder())
         monkeypatch.setattr(image_generation_tool, "_read_configured_image_provider", lambda: "recorder")
         monkeypatch.setattr(plugins_module, "_ensure_plugins_discovered", lambda **kwargs: None)
@@ -70,11 +83,18 @@ class TestPluginDispatch:
         krea_error = {"success": False, "image": None, "error": "Krea connection error", "error_type": "connection_error",
                       "fallback_eligible": eligible}
         fal_calls = []
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (tmp_path / "config.yaml").write_text(
+            json.dumps({"security": {"model_workspace_root": str(workspace)}}), encoding="utf-8")
+        generated = tmp_path / "cache" / "fal.png"
+        generated.parent.mkdir()
+        generated.write_bytes(b"\x89PNG\r\n\x1a\n")
 
         def fake_fal(prompt, aspect_ratio, **kwargs):
             fal_calls.append(kwargs)
             if fal_ok:
-                return json.dumps({"success": True, "image": "/tmp/fal.png", "modality": "text", "upscaled": False})
+                return json.dumps({"success": True, "image": str(generated), "modality": "text", "upscaled": False})
             return json.dumps({"success": False, "image": None, "error": "FAL down", "error_type": "api_error"})
 
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -106,10 +126,17 @@ class TestPluginDispatch:
         krea_error = {"success": False, "image": None, "error": "refused", "error_type": "connection_error",
                       "fallback_eligible": True}
         fal_calls = []
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (tmp_path / "config.yaml").write_text(
+            json.dumps({"security": {"model_workspace_root": str(workspace)}}), encoding="utf-8")
+        generated = tmp_path / "cache" / "fal.png"
+        generated.parent.mkdir()
+        generated.write_bytes(b"\x89PNG\r\n\x1a\n")
 
         def fake_fal(prompt, aspect_ratio, **kwargs):
             fal_calls.append(kwargs)
-            return json.dumps({"success": True, "image": "/tmp/fal.png", "modality": "text", "upscaled": True})
+            return json.dumps({"success": True, "image": str(generated), "modality": "text", "upscaled": True})
 
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         monkeypatch.setattr(ig, "_dispatch_to_plugin_provider", lambda *a, **k: None)

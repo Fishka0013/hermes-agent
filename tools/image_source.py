@@ -2,9 +2,9 @@
 
 Everything funnels through :func:`resolve_image_source` so size and magic-byte checks run
 exactly once. Images are the default; video callers opt in via ``permitted=("video",)``.
-Security (GHSA-gpxw-6wxv-w3qq): under a non-local backend vision is confined like the file
-tools — host-read only inside a media cache (bind-mounted into the sandbox), anything else is
-exec-read *inside the sandbox*, so ``vision_analyze('/etc/passwd')`` never reads the host.
+Local model sources are confined to MODEL_WORKSPACE_ROOT before any byte read
+or provider invocation. Runtime cache paths require trusted publication first;
+terminal backend/cwd never adds model authority.
 """
 from __future__ import annotations
 
@@ -37,6 +37,8 @@ class NotAnImage(ImageResolutionError): ...
 @dataclass
 class ResolveContext:
     task_id: Optional[str] = None
+    resolution_base: Optional[str] = None
+    scope_base: Optional[str] = None
 
 
 @dataclass
@@ -78,7 +80,7 @@ async def resolve_image_source(
         data = await asyncio.to_thread(host_target.read_bytes)
         return _finalize(data, "", "file", s, permitted)
     if _is_local_terminal_backend():
-        # Any path was host-readable, so a miss means the file doesn't exist.
+        # The central workspace gate has already approved this candidate.
         raise SourceNotFound(f"media file not found: '{p}'", src=s, origin="file")
     return await _resolve_container_fallback(p, ctx, s, permitted)
 
@@ -150,39 +152,26 @@ def _is_local_terminal_backend() -> bool:
     return terminal_env("TERMINAL_ENV", "local").strip().lower() in ("local", "")
 
 
-# Host-side media caches: the only host paths vision may read under a non-local backend
-# (gateway inbound media + the tools' own download temp dirs).
-_MEDIA_CACHE_SUBDIRS = (
-    "cache",  # cache/images, cache/vision, cache/video(s), cache/audio
-    "images",  # desktop/clipboard/PDF uploads (tui_gateway)
-    "image_cache", "audio_cache", "video_cache", "temp_vision_images", "temp_video_files")
-
-
-def _media_cache_roots() -> list:
-    from hermes_constants import get_hermes_home
-    home = get_hermes_home()
-    return [home / sub for sub in _MEDIA_CACHE_SUBDIRS]
-
-
 def _permitted_host_read_target(p: Path, ctx: ResolveContext) -> Optional[Path]:
-    """Host path to read, or ``None`` (caller exec-reads inside the sandbox instead).
-
-    Local backend: any path. Non-local: only paths inside a media cache root (a
-    container-visible cache path is first translated back to its host mount).
-    """
-    if _is_local_terminal_backend():
-        try:
-            return p.resolve()
-        except Exception:
-            return p
-    from tools.credential_files import from_agent_visible_cache_path
+    """Resolve model media through the workspace policy; caches confer no authority."""
+    from agent.model_file_policy import (
+        ModelFilePolicyError, resolve_model_read_path, validate_resolution_base)
     try:
-        real = Path(from_agent_visible_cache_path(str(p))).resolve()
-    except Exception:
-        return None
-    if any(real.is_relative_to(root.resolve()) for root in _media_cache_roots()):
-        return real
-    return None
+        base, scope = ctx.resolution_base, ctx.scope_base
+        if not p.is_absolute():
+            if base is None and ctx.task_id:
+                from tools.file_tools_paths import _resolve_base_dir
+                base = str(_resolve_base_dir(ctx.task_id, container_paths=False))
+            if base is not None:
+                base = str(validate_resolution_base(base))
+            if scope is not None:
+                scope = str(validate_resolution_base(scope))
+            scope = scope or base
+        else:
+            base = scope = None
+        return resolve_model_read_path(str(p), resolution_base=base, scope_base=scope)
+    except ModelFilePolicyError as exc:
+        raise SourceUnsafe(str(exc), src=str(p), origin="file") from exc
 
 
 def _get_active_env(task_id: Optional[str]):

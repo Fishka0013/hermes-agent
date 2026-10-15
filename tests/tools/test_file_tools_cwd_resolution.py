@@ -352,3 +352,13 @@ def test_v4a_delete_and_move_act_on_a_symlink_not_its_target(
     assert str(link) in out["files_modified"]
     if dest:
         assert os.readlink(workspace / dest) == "safe/base.yaml"
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)
