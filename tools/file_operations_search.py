@@ -295,8 +295,15 @@ class SearchMixin:
             return cached
         from tools.environments.local import LocalEnvironment, _IS_WINDOWS
 
-        # A local search is Hermes's own work, so it runs the pinned ripgrep, never the
-        # first rg on the terminal PATH, where the user's tools come first.
+        # A model-confined local environment deliberately exposes only the exact
+        # Seatbelt executable allowlist. The host-pinned ripgrep lives outside that
+        # authority, so selecting it would fail after resolution and suppress the
+        # safe grep/find fallbacks. Keep the engine inside the sandbox contract.
+        if isinstance(self.env, LocalEnvironment) and getattr(self.env, "confinement", None) is not None:
+            return None
+
+        # An unrestricted local search is Hermes's own work, so it runs the pinned
+        # ripgrep, never the first rg on the terminal PATH, where user tools come first.
         bundled = _bundled_rg() if isinstance(self.env, LocalEnvironment) else None
         if bundled:
             self._rg_resolution_cache[cmd] = bundled

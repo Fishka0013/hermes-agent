@@ -112,3 +112,67 @@ def test_v4a_entry_and_target_are_confined_before_backend(file_profiles, monkeyp
     if shape != "traversal_header":
         assert entry.is_symlink()
     assert not (root / "destination.txt").exists()
+
+@pytest.mark.platforms("macos")
+def test_registered_filename_search_inside_authorized_workspace(file_profiles, monkeypatch):
+    """R1: registered target=files works through the real confined local backend."""
+    from model_tools import handle_function_call
+    from tools import file_tools
+    from tools.environments.local import LocalEnvironment
+    from tools.environments.macos_confinement import MacOSTerminalConfinement
+    from tools.file_operations import ShellFileOperations
+
+    profiles, _outside = file_profiles
+    home, root = profiles[0]
+    wanted = root / "r1-existing-name.txt"
+    wanted.write_text("R1_CONTENT_SENTINEL", encoding="utf-8")
+
+    token = set_hermes_home_override(home)
+    env = None
+    try:
+        confinement = MacOSTerminalConfinement()
+        env = LocalEnvironment(cwd=str(root), confinement=confinement)
+        ops = ShellFileOperations(env)
+        monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id="default": ops)
+
+        result = json.loads(handle_function_call(
+            "search_files",
+            {"pattern": wanted.name, "target": "files", "path": str(root)},
+            task_id="r1-filename-search",
+        ))
+        content = json.loads(handle_function_call(
+            "search_files",
+            {"pattern": "R1_CONTENT_SENTINEL", "target": "content", "path": str(root)},
+            task_id="r1-content-search",
+        ))
+    finally:
+        if env is not None:
+            env.cleanup()
+        reset_hermes_home_override(token)
+
+    assert "error" not in result, result
+    assert str(wanted) in json.dumps(result), result
+    assert "error" not in content, content
+    assert "R1_CONTENT_SENTINEL" in json.dumps(content), content
+
+
+@pytest.mark.platforms("macos")
+def test_registered_filename_search_cannot_escape_authorized_workspace(file_profiles, monkeypatch):
+    from model_tools import handle_function_call
+    from tools import file_tools
+
+    profiles, outside = file_profiles
+    calls = []
+
+    def forbidden_backend(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("escaped filename search reached backend")
+
+    monkeypatch.setattr(file_tools, "_get_file_ops", forbidden_backend)
+    result = json.loads(handle_function_call(
+        "search_files",
+        {"pattern": outside.name, "target": "files", "path": str(outside.parent)},
+        task_id="r1-filename-escape",
+    ))
+    assert "error" in result and "MODEL_WORKSPACE_ROOT" in result["error"]
+    assert calls == []
