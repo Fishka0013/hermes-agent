@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent.video_gen_provider import (
@@ -154,13 +155,35 @@ def _normalize_reference_images(value: Any) -> Optional[list[str]]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()] or None
 
 
-def _handle_video_generate(args: dict[str, Any], **_kw: Any) -> str:
+def _publish_generated_video_result(result: Dict[str, Any], task_id: Optional[str]) -> Dict[str, Any]:
+    """Publish trusted provider outputs before returning a model-addressable path."""
+    video = result.get("video")
+    if not result.get("success") or not isinstance(video, str) or not video.strip():
+        return result
+    if video.strip().lower().startswith(("http://", "https://", "data:")):
+        return result
+    from agent.model_file_policy import (
+        ModelFilePolicyError, make_internal_artifact_source,
+        publish_internal_artifact_for_model, resolve_model_read_path,
+    )
+    if not Path(video).is_absolute():
+        raise ModelFilePolicyError("provider returned an unsupported local video path")
+    try:
+        published = resolve_model_read_path(video)
+    except ModelFilePolicyError:
+        published = publish_internal_artifact_for_model(
+            make_internal_artifact_source(video, source_class="video-generation"),
+            namespace="generated-videos", task_id=task_id, session_id=task_id).path
+    return {**result, "video": str(published)}
+
+
+def _handle_video_generate(args: Dict[str, Any], **_kw: Any) -> str:
     prompt = (args.get("prompt") or "").strip()
     image_url = (args.get("image_url") or "").strip() or None
     reference_image_urls = _normalize_reference_images(args.get("reference_image_urls"))
     task_id = _kw.get("task_id")
 
-    # Confinement chokepoint (mirrors image_generate): non-local backends hand providers data: URLs.
+    # Every model local source is confined before provider dispatch, independently of backend/cwd.
     from tools.image_generation_tool import _confine_source_images
     image_url, reference_image_urls, confine_error = _confine_source_images(
         image_url, reference_image_urls, task_id)
@@ -214,6 +237,11 @@ def _handle_video_generate(args: dict[str, Any], **_kw: Any) -> str:
         return _err(f"Provider '{pname}' error: {exc}", "provider_exception")
     if not isinstance(result, dict):
         return _err("Provider returned a non-dict result", "provider_contract")
+    try:
+        result = _publish_generated_video_result(result, task_id)
+    except Exception as exc:
+        logger.warning("Could not publish generated video for model access: %s", exc)
+        return _err(f"Generated video could not be published safely: {exc}", "artifact_publish_failed")
     return json.dumps(result)
 
 

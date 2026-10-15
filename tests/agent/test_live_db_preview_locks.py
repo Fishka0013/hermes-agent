@@ -99,7 +99,9 @@ def test_preview_preserves_live_database_locks(tmp_path, route, target_kind):
             os.close(lock_fd)
 
 
-def test_closed_database_can_still_be_previewed(tmp_path):
+def test_closed_database_can_still_be_previewed(tmp_path, monkeypatch):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+    configure_model_workspace(monkeypatch, tmp_path)
     path = tmp_path / "offline.db"
     db = SessionDB(path)
     db.create_session("offline", "cli")

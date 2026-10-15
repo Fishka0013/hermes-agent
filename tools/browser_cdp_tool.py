@@ -393,18 +393,22 @@ def _browser_cdp_check() -> bool:
     return bool(check_browser_requirements() and _get_cdp_override_raw())
 
 
+def _model_cdp_check() -> bool:
+    """Raw CDP can bypass navigation guards or grant local-file authority."""
+    return False
+
+
+def _model_cdp_refusal(args, **kw):
+    return tool_error(
+        "Raw browser_cdp is unavailable to ordinary model tools: unrestricted "
+        "protocol commands have no approved local-file fence. Use bounded browser tools.")
+
+
 registry.register(
     name="browser_cdp",
     toolset="browser-cdp",
     schema=BROWSER_CDP_SCHEMA,
-    handler=lambda args, **kw: routed_browser_handler(
-        "browser_cdp", args,
-        fallback=lambda: browser_cdp(
-            method=args.get("method", ""), params=args.get("params"), target_id=args.get("target_id"),
-            frame_id=args.get("frame_id"), timeout=args.get("timeout", 30.0), task_id=kw.get("task_id"),
-        ),
-        task_id=kw.get("task_id"), session_id=kw.get("session_id"),
-    ),
-    check_fn=_browser_cdp_check,
+    handler=_model_cdp_refusal,
+    check_fn=_model_cdp_check,
     emoji="🧪",
 )

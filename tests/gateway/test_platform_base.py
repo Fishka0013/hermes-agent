@@ -20,12 +20,31 @@ from gateway.platforms.base import (
 from gateway.platforms.event import MessageEvent
 
 
+@pytest.fixture(autouse=True)
+def _sec3_model_root(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    hermes_home = tmp_path / ".hermes"
+    hermes_home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(root),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
+    return root
+
+
 def test_media_delivery_denies_encrypted_bitwarden_cache(tmp_path, monkeypatch):
     """Encrypted Bitwarden cache is covered by the media credential guard."""
     from gateway.platforms import base
 
     hermes_home = tmp_path / ".hermes"
-    hermes_home.mkdir()
+    hermes_home.mkdir(exist_ok=True)
     monkeypatch.setattr(base, "_HERMES_HOME", hermes_home)
     monkeypatch.setattr(base, "_HERMES_ROOT", hermes_home)
     path = hermes_home / "cache" / "bws_cache.enc.json"
@@ -1218,7 +1237,10 @@ class TestGetHumanDelay:
         ({"human_delay": {"mode": "custom", "min_ms": 3000, "max_ms": 1000}}, (800, 2500), "human_delay.max_ms=1000"),
     ])
     def test_config_bounds_are_validated_with_a_warning_naming_the_key(self, cfg, expected, warned_key, caplog):
-        from gateway.run import GatewayRunner
+        # Import the live-checkout gateway under the test venv contract; otherwise
+        # hermes_bootstrap probes the sealed-install manifest beside this checkout.
+        with patch("pm.environments.payload_venv", return_value=None):
+            from gateway.run import GatewayRunner
         with caplog.at_level(logging.WARNING, logger="gateway.run"):
             assert GatewayRunner._human_delay_from_config(cfg) == expected
         if warned_key is None:

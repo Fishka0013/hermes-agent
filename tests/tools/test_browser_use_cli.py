@@ -75,11 +75,11 @@ def _fake_cli(tmp_path, body):
 
 
 class TestModeDetection:
-    def test_default_on_when_cli_available(self, monkeypatch):
-        """Backend unset: Browser Use mode is the default when the CLI runs."""
-        monkeypatch.setattr("hermes_cli.config.read_raw_config", dict)
+    def test_host_harness_does_not_enable_ordinary_model_mode(self, monkeypatch):
+        """A dependency being installed does not grant host Python authority."""
+        monkeypatch.setattr("hermes_cli.config.read_raw_config", lambda: {})
         monkeypatch.setattr(bu_cli, "_find_cli", lambda: ["/usr/bin/browser-use"])
-        assert bu_cli.is_browser_use_cli_mode() is True
+        assert bu_cli.is_browser_use_cli_mode() is False
 
     def test_default_off_when_cli_unavailable(self, monkeypatch):
         """Backend unset + no runnable CLI: keep the built-in browser tools."""
@@ -104,12 +104,12 @@ class TestModeDetection:
         monkeypatch.setattr(bu_cli, "_find_cli", lambda: ["/usr/bin/browser-use"])
         assert bu_cli.is_browser_use_cli_mode() is False
 
-    def test_config_opt_in(self, monkeypatch):
+    def test_config_cannot_grant_unfenced_host_execution(self, monkeypatch):
         monkeypatch.setattr(
             "hermes_cli.config.read_raw_config",
             lambda: {"browser": {"backend": "browser-use"}},
         )
-        assert bu_cli.is_browser_use_cli_mode() is True
+        assert bu_cli.is_browser_use_cli_mode() is False
 
     def test_other_backend_value_is_not_cli_mode(self, monkeypatch):
         monkeypatch.setattr(
@@ -222,7 +222,7 @@ class TestToolSurfaceSwap:
         names = {t["function"]["name"] for t in defs}
         assert "browser_exec" not in names
 
-    def test_browser_exec_present_with_terminal(self, monkeypatch):
+    def test_terminal_presence_does_not_grant_browser_host_execution(self, monkeypatch):
         monkeypatch.setattr(bu_cli, "is_browser_use_cli_mode", lambda: True)
         from tools.registry import registry
 
@@ -234,7 +234,7 @@ class TestToolSurfaceSwap:
             enabled_toolsets=["browser", "terminal"], quiet_mode=False
         )
         names = {t["function"]["name"] for t in defs}
-        assert "browser_exec" in names
+        assert "browser_exec" not in names
 
 
 class TestVaultSupervisorAttach:
@@ -309,7 +309,7 @@ class TestLegacyCloudMigration:
     def test_direct_api_config_migrates(self, monkeypatch):
         monkeypatch.setattr("hermes_cli.config.read_raw_config", lambda: self._LEGACY)
         monkeypatch.setenv("BROWSER_USE_API_KEY", "bu-key")
-        assert bu_cli.is_browser_use_cli_mode() is True
+        assert bu_cli.is_browser_use_cli_mode() is False
 
     def test_gateway_config_stays_on_legacy_path(self, monkeypatch):
         monkeypatch.setattr(
@@ -376,7 +376,7 @@ class TestLegacyCloudMigration:
         monkeypatch.setenv("BROWSER_USE_API_KEY", "bu-key")
         monkeypatch.setenv("BROWSERBASE_API_KEY", "bb-key")
         monkeypatch.setenv("BROWSERBASE_PROJECT_ID", "bb-project")
-        assert bu_cli.is_browser_use_cli_mode() is True
+        assert bu_cli.is_browser_use_cli_mode() is False
 
 
     def test_migrated_config_gets_bu_autospawn(self, tmp_path, monkeypatch):
@@ -1238,7 +1238,7 @@ class TestTimeoutProcessGroupKill:
     blocked forever, and the wedged call's activity heartbeat pins the session at
     "now" in the sidebar indefinitely."""
 
-    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
+    @pytest.mark.platforms("posix")
     def test_timeout_kills_grandchild_and_returns_promptly(self, tmp_path, monkeypatch):
         """A grandchild that outlives the direct child and holds the inherited stdout
         pipe must not keep browser_exec blocked past the timeout (it wedged permanently
@@ -1246,16 +1246,34 @@ class TestTimeoutProcessGroupKill:
         monkeypatch.setattr("hermes_cli.config.read_raw_config", dict)
         pid_file = tmp_path / "grandchild.pid"
         cli = _fake_cli(tmp_path, (
-            "cat > /dev/null\n"
             "sleep 60 &\n"
             "echo $! > \"" + str(pid_file) + "\"\n"
+            "cat > /dev/null\n"
             "sleep 60\n"
         ))
         monkeypatch.setattr(bu_cli, "_find_cli", lambda: [cli])
-        monkeypatch.setattr(bu_cli, "_MIN_TIMEOUT_S", 1)
+        real_popen = subprocess.Popen
+
+        def spawn_ready(cmd, *args, **kwargs):
+            proc = real_popen(cmd, *args, **kwargs)
+            if cmd == [cli]:
+                # Start the timeout only after a real pipe-holding grandchild exists.
+                # A slow native spawn must not turn this kill regression into a startup race.
+                deadline = time.monotonic() + 10
+                while not pid_file.exists() and proc.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                if not pid_file.exists():
+                    bu_cli._kill_cli_process_group(proc)
+                    proc.communicate(timeout=5)
+                    pytest.fail("Fake CLI did not signal grandchild readiness")
+                assert psutil.pid_exists(int(pid_file.read_text().strip()))
+            return proc
+
+        monkeypatch.setattr(subprocess, "Popen", spawn_ready)
+        monkeypatch.setattr(bu_cli, "_MIN_TIMEOUT_S", 2)
 
         start = time.time()
-        result = json.loads(bu_cli.browser_exec("print(1)", timeout_s=1))
+        result = json.loads(bu_cli.browser_exec("print(1)", timeout_s=2))
         elapsed = time.time() - start
 
         assert "timed out" in result["error"]

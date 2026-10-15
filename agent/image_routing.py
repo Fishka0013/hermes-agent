@@ -504,14 +504,13 @@ def _file_to_data_url(path: Path) -> Optional[str]:
     MIMEs outside the accepted set are transcoded to PNG. None when unreadable,
     blocked by the read guard, or untranscodable — the caller reports ``skipped``."""
     try:
+        from agent.model_file_policy import resolve_model_read_path
+        path = resolve_model_read_path(path)
         from agent.file_safety import raise_if_read_blocked
-
         raise_if_read_blocked(str(path))
-    except ValueError as exc:
+    except Exception as exc:
         logger.warning("image_routing: blocked local image attachment %s -- %s", path, exc)
         return None
-    except Exception:
-        pass  # Keep attachment routing best-effort if the guard itself is unavailable.
     try:
         raw = path.read_bytes()
     except Exception as exc:

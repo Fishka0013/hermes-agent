@@ -190,3 +190,13 @@ def test_remote_probe_failure_fails_closed(remote_target):
         error = result.get("error") or ""
         assert "Refusing" in error and "establish" in error, (failure_mode, result)
         assert target_path.read_bytes() == original
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

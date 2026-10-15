@@ -334,3 +334,11 @@ def test_third_patch_failure_hint_requires_a_full_reread_before_write_file(tmp_p
     assert "failure #3" in hint
     assert "re-read the file in full, then use write_file to replace it" in hint
     assert "use write_file to replace the entire file" not in hint
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

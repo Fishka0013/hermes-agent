@@ -327,8 +327,9 @@ def _select_tool_names(enabled_toolsets: Optional[list[str]], disabled_toolsets:
     else:
         from toolsets import TOOLSET_SESSION_PLATFORMS, get_all_toolsets
         for ts_name in get_all_toolsets():
-            if ts_name not in TOOLSET_SESSION_PLATFORMS:
+            if ts_name not in TOOLSET_SESSION_PLATFORMS and ts_name != "computer_use":
                 tools.update(resolve_toolset(ts_name))
+        tools.discard("computer_use")
     # Disabled toolsets are always subtracted LAST, so a tool in a disabled
     # toolset is stripped even when a composite (hermes-cli) re-enables it.
     # This ensures that even if a composite toolset (like hermes-cli) is enabled, any tools belonging to a

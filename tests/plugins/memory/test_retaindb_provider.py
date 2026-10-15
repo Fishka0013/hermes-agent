@@ -11,6 +11,20 @@ from plugins.memory import retaindb
 from plugins.memory.retaindb import RetainDBMemoryProvider
 
 
+@pytest.fixture(autouse=True)
+def _sec3_model_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(tmp_path),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
+
+
 def test_write_queue_closes_owner_connection(tmp_path):
     queue = retaindb._WriteQueue(object(), tmp_path / "retaindb.db")
     owner_conn = queue._local.conn
@@ -74,6 +88,19 @@ def test_upload_file_rejects_hermes_credential_store(tmp_path, monkeypatch):
 
     assert "error" in result
     assert "credential store" in result["error"]
+    provider._client.upload_file.assert_not_called()
+
+
+def test_upload_file_blocks_outside_model_workspace(tmp_path):
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.md"
+    outside.write_text("outside\n", encoding="utf-8")
+    provider = RetainDBMemoryProvider()
+    provider._client = MagicMock()
+    try:
+        result = provider._dispatch("retaindb_upload_file", {"local_path": str(outside)})
+    finally:
+        outside.unlink(missing_ok=True)
+    assert "outside MODEL_WORKSPACE_ROOT" in result["error"]
     provider._client.upload_file.assert_not_called()
 
 

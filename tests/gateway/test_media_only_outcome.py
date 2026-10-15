@@ -118,3 +118,13 @@ async def test_media_only_failure_still_reports_failure(tmp_path, monkeypatch):
 
     assert adapter.images_sent == [str(png)]
     assert adapter.outcomes == [ProcessingOutcome.FAILURE]
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

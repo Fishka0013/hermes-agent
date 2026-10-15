@@ -524,3 +524,13 @@ def test_auto_append_lane_still_dedups_stale_media():
         history, history_offset=0, history_media_paths=paths
     )
     assert tags == [], f"stale auto-append tags re-emitted: {tags}"
+
+
+# Positive file consumers use explicit on-disk model authority.
+import pytest as _sec3_pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_workspace
+
+
+@_sec3_pytest.fixture(autouse=True)
+def _sec3_positive_workspace(monkeypatch, tmp_path):
+    return _sec3_workspace(monkeypatch, tmp_path)

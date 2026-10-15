@@ -17,6 +17,7 @@ attachments whose per-file mimetype is unknown (empty) — platforms that don't
 populate media_types.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -64,7 +65,25 @@ def test_placeholder_document_in_photo_message_is_not_an_image():
 
 
 @pytest.mark.asyncio
-async def test_mixed_document_event_preserves_audio_as_non_stt_file_path():
+async def test_mixed_document_event_preserves_audio_as_non_stt_file_path(tmp_path, monkeypatch):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    monkeypatch.setattr(
+        "hermes_cli.config.get_model_file_security_config",
+        lambda: {
+            "model_workspace_root": str(root),
+            "model_staging_max_file_bytes": 50 * 1024 * 1024,
+            "model_staging_session_quota_bytes": 256 * 1024 * 1024,
+            "model_staging_profile_quota_bytes": 1024 * 1024 * 1024,
+            "model_staging_ttl_seconds": 86400,
+        },
+    )
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    audio = cache / "audio.mp3"
+    report = cache / "report.pdf"
+    audio.write_bytes(b"audio")
+    report.write_bytes(b"%PDF")
     runner = object.__new__(GatewayRunner)
     runner.config = GatewayConfig(
         platforms={Platform.TELEGRAM: PlatformConfig(enabled=True, token="fake")}
@@ -84,7 +103,7 @@ async def test_mixed_document_event_preserves_audio_as_non_stt_file_path():
         text="inspect both",
         message_type=MessageType.DOCUMENT,
         source=source,
-        media_urls=["/cache/audio.mp3", "/cache/report.pdf"],
+        media_urls=[str(audio), str(report)],
         media_types=["audio/mpeg", "application/pdf"],
     )
 
@@ -95,8 +114,13 @@ async def test_mixed_document_event_preserves_audio_as_non_stt_file_path():
     )
 
     assert prepared is not None
-    assert "/cache/audio.mp3" in prepared
-    assert "/cache/report.pdf" in prepared
+    assert str(audio) not in prepared and str(report) not in prepared
+    assert len(event.media_urls) == 2
+    for staged in event.media_urls:
+        staged_path = Path(staged)
+        assert staged_path.is_relative_to(root)
+        assert staged_path.is_file()
+        assert staged in prepared
     assert "transcrib" in prepared.lower()
 
 
