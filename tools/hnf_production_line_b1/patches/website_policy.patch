@@ -1,0 +1,64 @@
+diff --git a/tools/website_policy.py b/tools/website_policy.py
+index ea220e335cd..92b94f97e46 100644
+--- a/tools/website_policy.py
++++ b/tools/website_policy.py
+@@ -148,30 +148,49 @@ def _extract_host_from_urlish(url: str) -> str:
+     return host
+ 
+ 
++def _policy_error_block(url: str, host: str) -> Dict[str, str]:
++    """Generic fail-closed result for default-path policy evaluation errors."""
++    return {
++        "url": url,
++        "host": host,
++        "rule": "policy-evaluation-error",
++        "source": "website-policy",
++        "message": "Blocked by website policy: policy evaluation could not be completed safely",
++    }
++
++
+ def check_website_access(url: str, config_path: Optional[Path] = None) -> Optional[Dict[str, str]]:
+     """``None`` if the URL is allowed by the blocklist policy, else block metadata (host/rule/source/message).
+ 
+-    Fails open on policy errors (warn + ``None``) so a config typo can't break all web tools — except with
+-    an explicit ``config_path`` (tests), where errors propagate.
++    Default-path policy evaluation errors fail closed with generic block metadata. An explicit
++    ``config_path`` remains a deterministic diagnostic path for normal policy-validation errors.
+     """
+-    # Fast path: cached policy disabled/empty → no YAML read, no host extraction.
++    # Fast path is valid only for the current default config path and inside the cache TTL.
++    # A disabled policy cached under one Hermes profile must never authorize another profile.
+     if config_path is None:
++        default_path = get_hermes_home() / "config.yaml"
++        resolved_path = str(default_path)
++        now = time.monotonic()
+         with _cache_lock:
+-            if _cached_policy is not None and not _cached_policy.get("enabled"):
++            fresh = _cached_policy_path == resolved_path and (now - _cached_policy_time) < _CACHE_TTL_SECONDS
++            if _cached_policy is not None and fresh and not _cached_policy.get("enabled"):
+                 return None
+     host = _extract_host_from_urlish(url)
+     if not host:
+         return None
+     try:
+         policy = load_website_blocklist(config_path)
+-    except WebsitePolicyError as exc:
++    except WebsitePolicyError:
+         if config_path is not None:
+             raise
+-        logger.warning("Website policy config error (failing open): %s", exc)
+-        return None
+-    except Exception as exc:
+-        logger.warning("Unexpected error loading website policy (failing open): %s", exc)
+-        return None
++        logger.warning("Website policy config error; blocking URL because policy evaluation failed")
++        return _policy_error_block(url, host)
++    except Exception:
++        if config_path is not None:
++            logger.warning("Unexpected website policy error on explicit diagnostic path (preserving prior fail-open behavior)")
++            return None
++        logger.warning("Unexpected website policy error; blocking URL because policy evaluation failed")
++        return _policy_error_block(url, host)
+     if not policy.get("enabled"):
+         return None
+     for rule in policy.get("rules", []):

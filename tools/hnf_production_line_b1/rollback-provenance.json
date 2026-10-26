@@ -1,0 +1,1 @@
+{"accepted_rollback":{"commit":"9978cfd32d75dcde33be5f79c7082047e8e1bfc0","tree":"6d263ebbcfe7642268760e436ca9b93a9dd23604"},"candidate_source":"versioned transformation of an exact sealed d3 artifact; not a source-only rebuild","runtime_locator_required":true,"schema":"hnf-production-line-rollback-provenance-v1"}
