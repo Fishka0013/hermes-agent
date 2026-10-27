@@ -62,7 +62,7 @@ def main():
         except OSError:
             pass
 
-    for patch_name in ('model_tools.patch', 'website_policy.patch'):
+    for patch_name in ('model_tools.patch', 'website_policy.patch', 'gateway_run.patch'):
         with (HERE / 'patches' / patch_name).open('rb') as patch_file:
             run('patch', '-p1', '--fuzz=0', '-d', dest / 'hermes-agent', stdin=patch_file)
 
@@ -72,6 +72,7 @@ def main():
     items = [
         ('hermes-agent/tools/website_policy.py', 'hermes-agent/tools/__pycache__/website_policy.cpython-314.pyc'),
         ('hermes-agent/model_tools.py', 'hermes-agent/__pycache__/model_tools.cpython-314.pyc'),
+        ('hermes-agent/gateway/run.py', 'hermes-agent/gateway/__pycache__/run.cpython-314.pyc'),
     ]
     for src_rel, pyc_rel in items:
         old = (base / pyc_rel).read_bytes()
