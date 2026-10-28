@@ -42,6 +42,9 @@ def main():
     for rel, expected in FROZEN['target_source_sha256'].items():
         if sha(base / 'hermes-agent' / rel) != expected:
             raise SystemExit('STOP_BASE_SOURCE_IDENTITY_MISMATCH ' + rel)
+    for rel in FROZEN.get('required_absent_source', []):
+        if (base / 'hermes-agent' / rel).exists():
+            raise SystemExit('STOP_BASE_SOURCE_UNEXPECTEDLY_PRESENT ' + rel)
     for name, expected in FROZEN['accepted_patch_sha256'].items():
         if sha(HERE / 'patches' / name) != expected:
             raise SystemExit('STOP_PATCH_IDENTITY_MISMATCH ' + name)
@@ -62,29 +65,39 @@ def main():
         except OSError:
             pass
 
-    for patch_name in ('model_tools.patch', 'website_policy.patch', 'gateway_run.patch'):
+    for patch_name in ('model_tools.patch', 'website_policy.patch', 'gateway_run.patch', 'gateway_release_static_selector.patch'):
         with (HERE / 'patches' / patch_name).open('rb') as patch_file:
             run('patch', '-p1', '--fuzz=0', '-d', dest / 'hermes-agent', stdin=patch_file)
+    # The selector source is created by the patch, so freeze its mode instead of inheriting process umask.
+    (dest / 'hermes-agent/hermes_cli/gateway_release_selector.py').chmod(0o644)
 
     pyexe = base / 'tools/python-3.14.7+20260901-darwin-arm64/bin/python3.14'
     if not pyexe.exists():
         raise SystemExit('STOP_SEALED_PYTHON_MISSING')
     items = [
-        ('hermes-agent/tools/website_policy.py', 'hermes-agent/tools/__pycache__/website_policy.cpython-314.pyc'),
-        ('hermes-agent/model_tools.py', 'hermes-agent/__pycache__/model_tools.cpython-314.pyc'),
-        ('hermes-agent/gateway/run.py', 'hermes-agent/gateway/__pycache__/run.cpython-314.pyc'),
+        ('hermes-agent/tools/website_policy.py', 'hermes-agent/tools/__pycache__/website_policy.cpython-314.pyc', None),
+        ('hermes-agent/model_tools.py', 'hermes-agent/__pycache__/model_tools.cpython-314.pyc', None),
+        ('hermes-agent/gateway/run.py', 'hermes-agent/gateway/__pycache__/run.cpython-314.pyc', None),
+        ('hermes-agent/hermes_cli/gateway_release.py', 'hermes-agent/hermes_cli/__pycache__/gateway_release.cpython-314.pyc', None),
+        ('hermes-agent/hermes_cli/gateway_launchd.py', 'hermes-agent/hermes_cli/__pycache__/gateway_launchd.cpython-314.pyc', None),
+        ('hermes-agent/hermes_cli/gateway_release_selector.py',
+         'hermes-agent/hermes_cli/__pycache__/gateway_release_selector.cpython-314.pyc',
+         'hermes-agent/hermes_cli/__pycache__/gateway_release.cpython-314.pyc'),
     ]
-    for src_rel, pyc_rel in items:
-        old = (base / pyc_rel).read_bytes()
+    for src_rel, pyc_rel, template_rel in items:
+        template = base / (template_rel or pyc_rel)
+        old = template.read_bytes()
         flags = struct.unpack('<I', old[4:8])[0]
         if flags != 1:
-            raise SystemExit('STOP_UNEXPECTED_PYC_FLAGS ' + pyc_rel)
+            raise SystemExit('STOP_UNEXPECTED_PYC_FLAGS ' + str(template.relative_to(base)))
         code = marshal.loads(old[16:])
+        dfile = code.co_filename if template_rel is None else str(Path(code.co_filename).with_name(Path(src_rel).name))
         out = dest / pyc_rel
+        out.parent.mkdir(parents=True, exist_ok=True)
         py_compile.compile(
             str(dest / src_rel),
             cfile=str(out),
-            dfile=code.co_filename,
+            dfile=dfile,
             doraise=True,
             invalidation_mode=PycInvalidationMode.UNCHECKED_HASH,
         )

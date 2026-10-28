@@ -1,0 +1,673 @@
+--- a/hermes_cli/gateway_release.py
++++ b/hermes_cli/gateway_release.py
+@@ -453,8 +453,234 @@
+             if self.data["state"] not in {"PREPARED", "ROLLED_BACK", "ROLLBACK_FAILED", "ACCEPTED"}:
+                 self.rollback()
+             raise
++
++
++
++class SelectorReleaseTransaction(ReleaseTransaction):
++    """Option-B append-only selector transaction; legacy plist transaction remains intact."""
++
++    def __init__(self, receipt: Path, *, service=None, canary_runner=None):
++        super().__init__(receipt, service=service)
++        self._selector_canary_runner = canary_runner
++
++    @classmethod
++    def prepare(cls, receipt: Path, *, journal: Path, selector_plist: Path, selector_security: dict,
++                releases_root: Path, config: Path, candidate: Path, home: Path, domain: str,
++                service=None, canary_runner=None):
++        from hermes_cli import gateway_release_selector as selector
++        receipt = Path(receipt).absolute()
++        journal = Path(journal).absolute()
++        selector_plist = Path(selector_plist).absolute()
++        config = Path(config).absolute()
++        home = Path(home).absolute()
++        releases_root = Path(releases_root).absolute()
++        if receipt.exists() or receipt != receipt.resolve() or journal != journal.resolve() or config != config.resolve():
++            raise ReleaseError("selector preparation requires new receipt and canonical journal/config")
++        selector.validate_security_baseline(journal, selector_security)
++        head = selector.read_journal(journal)["head"]
++        if head is None:
++            raise ReleaseError("selector preparation requires an existing committed release")
++        previous = selector.validate_selected_identity(head["selected"], releases_root)
++        candidate_data = selector.validate_selected_identity(candidate_identity(candidate), releases_root)
++        plist_value = plistlib.loads(_file(selector_plist))
++        if plist_value.get("Label") != "ai.hermes.gateway":
++            raise ReleaseError("static selector LaunchAgent label is invalid")
++        label = plist_value["Label"]
++        backend = service or MacLaunchService(home, label, domain)
++        process = backend.capture(previous)
++        from hermes_cli.gateway_release_config import prepare_config_contract
++        config_contract = prepare_config_contract(config, candidate_data, previous, home)
++        config_hash = _hash(_file(config))
++        if config_contract is not None and config_hash != config_contract["pre_sha256"]:
++            raise ReleaseError("config drifted during selector preparation")
++        data = {
++            "schema": 2,
++            "mode": "STATIC_SELECTOR_V1",
++            "state": "PREPARED",
++            "home": str(home),
++            "label": label,
++            "domain": domain,
++            "journal": str(journal),
++            "selector_plist": str(selector_plist),
++            "selector_security": selector_security,
++            "releases_root": str(releases_root),
++            "config": str(config),
++            "config_hash": config_hash,
++            "previous": previous,
++            "candidate": candidate_data,
++            "previous_process": process,
++            "selection_generation": head["generation"],
++            "selection_hash": head["record_hash"],
++        }
++        if config_contract is not None:
++            data["config_contract"] = config_contract
++        _json(receipt, data)
++        return cls(receipt, service=backend, canary_runner=canary_runner)
++
++    @contextmanager
++    def _owner(self):
++        import fcntl
++        key = _hash(self.data["journal"].encode())[:24]
++        root = Path(self.data["home"]) / "deployment-locks"
++        if root.is_symlink():
++            raise ReleaseError("deployment lock path is symlinked")
++        root.mkdir(exist_ok=True)
++        lock_path, pending = root / (key + ".lock"), root / (key + ".pending.json")
++        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
++        try:
++            try:
++                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
++            except BlockingIOError as exc:
++                raise ReleaseError("another release transaction is active") from exc
++            if pending.exists():
++                owner = json.loads(_file(pending)).get("receipt")
++                if owner != str(self.receipt):
++                    raise ReleaseError("an unaccepted/stale selector transaction owns this journal; rollback it first")
++            self.data = json.loads(_file(self.receipt))
++            yield pending
++        finally:
++            os.close(fd)
++
++    def _check_metadata(self):
++        from hermes_cli import gateway_release_selector as selector
++        selector.validate_security_baseline(Path(self.data["journal"]), self.data["selector_security"])
++
++    def _require_head(self, expected_identity: dict) -> dict:
++        from hermes_cli import gateway_release_selector as selector
++        head = selector.read_journal(Path(self.data["journal"]))["head"]
++        if (head is None or head["generation"] != self.data["selection_generation"]
++                or head["record_hash"] != self.data["selection_hash"]):
++            raise ReleaseError("selection journal generation/hash CAS mismatch")
++        if head["selected"] != expected_identity:
++            raise ReleaseError("selection journal is in an unexpected third state")
++        return head
++
++    def _rollback_ready(self) -> bool:
++        from hermes_cli import gateway_release_selector as selector
++        try:
++            selector.validate_selected_identity(self.data["previous"], Path(self.data["releases_root"]))
++        except Exception:
++            return False
++        return True
++
++    def check(self, *, process=True):
++        from hermes_cli import gateway_release_selector as selector
++        from hermes_cli.gateway_release_config import check_config_contract
++        self._check_metadata()
++        if _hash(_file(Path(self.data["config"]))) != self.data["config_hash"]:
++            raise ReleaseError("configuration baseline drift")
++        check_config_contract(self.data)
++        if selector.validate_selected_identity(self.data["candidate"], Path(self.data["releases_root"])) != self.data["candidate"]:
++            raise ReleaseError("candidate identity drift")
++        self._require_head(self.data["previous"])
++        rollback_ready = self._rollback_ready()
++        if process and self.service.capture(self.data["previous"]) != self.data["previous_process"]:
++            raise ReleaseError("Gateway process baseline drift")
++        return {"ready": rollback_ready, "state": self.data["state"], "rollback_ready": rollback_ready}
+ 
++    def _append_selected(self, identity: dict) -> dict:
++        from hermes_cli import gateway_release_selector as selector
++        record = selector.append_generation(
++            Path(self.data["journal"]), identity,
++            expected_generation=self.data["selection_generation"], expected_hash=self.data["selection_hash"],
++        )
++        self.data["selection_generation"] = record["generation"]
++        self.data["selection_hash"] = record["record_hash"]
++        self._check_metadata()
++        return record
+ 
++    def activate(self):
++        with self._owner() as pending:
++            if self.data["state"] != "PREPARED":
++                raise ReleaseError("selector transaction is not PREPARED; do not replay activation")
++            _json(pending, {"receipt": str(self.receipt)})
++            result = self.check()
++            if not result["rollback_ready"]:
++                pending.unlink(missing_ok=True)
++                raise ReleaseError("retained rollback identity is unavailable")
++            self._save("APPENDING_SELECTION")
++            try:
++                record = self._append_selected(self.data["candidate"])
++                self._save("SELECTED", selection_generation=record["generation"], selection_hash=record["record_hash"])
++                self.service.stop()
++                self._save("BOOTSTRAP_REQUESTED", startup_attempt={
++                    "not_before": time.time(), "candidate_commit": self.data["candidate"]["commit"]})
++                self.service.start(Path(self.data["selector_plist"]))
++                live = self.service.verify(self.data["candidate"])
++                self._save("CANDIDATE_VERIFIED", candidate_process=live)
++                self._certify_config(process=live)
++                self._save("ACTIVE_UNACCEPTED", candidate_process=live)
++                return {"activated": True, "accepted": False, "process": live,
++                        "generation": self.data["selection_generation"]}
++            except Exception as exc:
++                self._save("ACTIVATION_FAILED", failure_kind=type(exc).__name__, failure_error=str(exc))
++                self._rollback(pending)
++                raise ReleaseError("selector candidate activation failed; previous release restored") from exc
++
++    def _rollback(self, pending: Path):
++        if not self._rollback_ready():
++            self._save("ROLLBACK_FAILED", rollback_error="retained rollback identity unavailable")
++            raise ReleaseError("rollback failed; retained rollback identity unavailable")
++        try:
++            self._require_head(self.data["candidate"])
++            config_error = None
++            try:
++                self._certify_config(process=self.data.get("candidate_process"))
++            except Exception as exc:
++                config_error = str(exc)
++            self._save("ROLLING_BACK")
++            self.service.stop()
++            record = self._append_selected(self.data["previous"])
++            self._save("ROLLBACK_SELECTED", selection_generation=record["generation"], selection_hash=record["record_hash"])
++            self.service.start(Path(self.data["selector_plist"]))
++            live = self.service.verify(self.data["previous"])
++            if config_error is not None:
++                raise ReleaseError("service restored, but config certification failed: " + config_error)
++            self._guard_config()
++            self._save("ROLLED_BACK", rollback_process=live, service_rollback="RESTORED",
++                       config_rollback=("NOT_PERFORMED_FORWARD_COMPATIBLE_NORMALIZATION"
++                                        if self.data.get("config_state", {}).get("kind") == "EXPECTED_CONFIG_MIGRATION"
++                                        else "UNCHANGED"))
++            pending.unlink(missing_ok=True)
++            return {"rolled_back": True, "process": live, "generation": record["generation"]}
++        except Exception as exc:
++            self._save("ROLLBACK_FAILED", rollback_error=type(exc).__name__, rollback_exact_error=str(exc))
++            raise ReleaseError("rollback failed; STOP production work") from exc
++
++    def accept(self):
++        with self._owner() as pending:
++            if self.data["state"] != "ACTIVE_UNACCEPTED":
++                raise ReleaseError("selector candidate is not awaiting acceptance")
++            _json(pending, {"receipt": str(self.receipt)})
++            try:
++                self._check_metadata()
++                self._require_head(self.data["candidate"])
++                from hermes_cli import gateway_release_selector as selector
++                if selector.validate_selected_identity(self.data["candidate"], Path(self.data["releases_root"])) != self.data["candidate"]:
++                    raise ReleaseError("candidate contents changed before acceptance")
++                live = self.service.verify(self.data["candidate"])
++                self._certify_config(process=live)
++                if self._selector_canary_runner is None:
++                    from hermes_cli.gateway_canary import run_canaries
++                    runner = run_canaries
++                else:
++                    runner = self._selector_canary_runner
++                evidence = runner(Path(self.data["home"]), expected_pid=live["pid"],
++                                  expected_handler=Path(self.data["candidate"]["repo"]) / "tools/terminal_tool.py")
++                final = self.service.verify(self.data["candidate"])
++                if final["pid"] != live["pid"] or final["start"] != live["start"]:
++                    raise ReleaseError("Gateway restarted during live acceptance")
++                self._require_head(self.data["candidate"])
++                self._guard_config()
++                self._save("ACCEPTED", acceptance=evidence, candidate_process=final)
++                pending.unlink(missing_ok=True)
++                return {"accepted": True, "process": final, "evidence": evidence,
++                        "generation": self.data["selection_generation"]}
++            except Exception as exc:
++                self._save("ACCEPTANCE_FAILED", failure_kind=type(exc).__name__, failure_error=str(exc))
++                self._rollback(pending)
++                raise ReleaseError("selector candidate acceptance failed; previous release restored") from exc
++
+ def main(argv=None):
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument("action", choices=("check", "activate", "rollback", "accept", "execute"))
+--- a/hermes_cli/gateway_launchd.py
++++ b/hermes_cli/gateway_launchd.py
+@@ -455,6 +455,62 @@
+ </plist>
+ """
+ 
++
++def generate_static_selector_launchd_plist(selector_command: list[str]) -> str:
++    """Pure future Option-B LaunchAgent definition; never reads or writes a selected release.
++
++    The stable command is deliberately injected. Release promotion changes only the
++    append-only selection journal, so a normal promotion cannot require plist bytes to change.
++    """
++    if not selector_command or any(type(part) is not str or not part for part in selector_command):
++        raise ValueError("stable selector command must be a non-empty argv")
++    home = Path("/Users/yura/.hermes")
++    label = "ai.hermes.gateway"
++    stdout_log, stderr_log = home / "logs/gateway.log", home / "logs/gateway.error.log"
++    prog_args = launchd_program_arguments(list(selector_command), stdout_log, stderr_log)
++    prog_args_xml = "\n        ".join(f"<string>{escape(part)}</string>" for part in prog_args)
++    return f'''<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
++<plist version="1.0">
++<dict>
++    <key>Label</key>
++    <string>{label}</string>
++    <key>ProgramArguments</key>
++    <array>
++        {prog_args_xml}
++    </array>
++    <key>WorkingDirectory</key>
++    <string>{home}</string>
++    <key>EnvironmentVariables</key>
++    <dict>
++        <key>HERMES_HOME</key>
++        <string>{home}</string>
++        <key>HERMES_SUPERVISED_CHILD</key>
++        <string>1</string>
++    </dict>
++    <key>LimitLoadToSessionType</key>
++    <array>
++        <string>Aqua</string>
++        <string>Background</string>
++    </array>
++    <key>RunAtLoad</key>
++    <true/>
++    <key>KeepAlive</key>
++    <dict>
++        <key>SuccessfulExit</key>
++        <false/>
++    </dict>
++    <key>ThrottleInterval</key>
++    <integer>30</integer>
++    <key>ExitTimeOut</key>
++    <integer>60</integer>
++    <key>StandardOutPath</key>
++    <string>{stdout_log}</string>
++    <key>StandardErrorPath</key>
++    <string>{stderr_log}</string>
++</dict>
++</plist>
++'''
+ 
+ def launchd_plist_is_current() -> bool:
+     """Check if the installed launchd plist matches the currently generated one."""
+--- /dev/null
++++ b/hermes_cli/gateway_release_selector.py
+@@ -0,0 +1,368 @@
++"""Static release-selector primitives for the native macOS release foundation.
++
++The journal is append-only and trusted-owner scoped.  It detects accidental or
++unexpected metadata/content drift, but does not claim isolation from a hostile
++process running as the same UID.  Release admission delegates to the existing
++native ``gateway_release.candidate_identity`` machinery and then adds the
++static-selector root/manifest constraints.
++"""
++from __future__ import annotations
++
++import hashlib
++import json
++import os
++from pathlib import Path
++import re
++import stat
++import subprocess
++from typing import Callable
++
++from hermes_cli.gateway_release_errors import ReleaseError
++from hermes_cli.gateway_release_metadata import metadata_hash
++
++SCHEMA = 1
++MAX_RECORD_BYTES = 64 * 1024
++MAX_JOURNAL_BYTES = 16 * 1024 * 1024
++_RECORD_FIELDS = frozenset({"schema", "generation", "previous_record_hash", "selected", "record_hash"})
++_SELECTED_FIELDS = frozenset({
++    "release", "commit", "tree", "manifest_hash", "inventory_hash",
++    "repo", "executable", "launcher", "site",
++})
++_SECURITY_FIELDS = frozenset({"uid", "gid", "mode", "flags", "acl", "xattrs"})
++_HEX40 = re.compile(r"[0-9a-f]{40}")
++_HEX64 = re.compile(r"[0-9a-f]{64}")
++TRUSTED_OWNER_LIMIT = (
++    "The selector is a trusted-owner operational boundary, not hostile-same-UID isolation; "
++    "UF_APPEND may reduce accidental replacement risk but the owning UID can remove it."
++)
++
++
++def _sha256(data: bytes) -> str:
++    return hashlib.sha256(data).hexdigest()
++
++
++def _canonical_json(value) -> bytes:
++    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
++
++
++def _strict_object(pairs):
++    out = {}
++    for key, value in pairs:
++        if key in out:
++            raise ReleaseError("selection journal contains duplicate JSON key")
++        out[key] = value
++    return out
++
++
++def _strict_json(raw: bytes):
++    try:
++        return json.loads(raw.decode("utf-8"), object_pairs_hook=_strict_object)
++    except ReleaseError:
++        raise
++    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
++        raise ReleaseError("selection journal contains malformed JSON") from exc
++
++
++def _validate_selected_shape(selected: object) -> dict:
++    if not isinstance(selected, dict) or set(selected) != _SELECTED_FIELDS:
++        raise ReleaseError("selection record has invalid selected identity fields")
++    if any(type(selected[name]) is not str or not selected[name] for name in _SELECTED_FIELDS):
++        raise ReleaseError("selection record has invalid selected identity types")
++    if not _HEX40.fullmatch(selected["commit"]) or not _HEX40.fullmatch(selected["tree"]):
++        raise ReleaseError("selection record has invalid source identity")
++    if not _HEX64.fullmatch(selected["manifest_hash"]) or not _HEX64.fullmatch(selected["inventory_hash"]):
++        raise ReleaseError("selection record has invalid release hashes")
++    return selected
++
++
++def _record_payload(record: dict) -> dict:
++    return {name: record[name] for name in ("schema", "generation", "previous_record_hash", "selected")}
++
++
++def record_hash(record: dict) -> str:
++    return _sha256(_canonical_json(_record_payload(record)))
++
++
++def make_record(generation: int, previous_record_hash: str | None, selected: dict) -> dict:
++    if type(generation) is not int or generation < 1:
++        raise ReleaseError("selection generation must be a positive integer")
++    if generation == 1:
++        if previous_record_hash is not None:
++            raise ReleaseError("generation 1 must have null previous_record_hash")
++    elif type(previous_record_hash) is not str or not _HEX64.fullmatch(previous_record_hash):
++        raise ReleaseError("selection generation must link the exact previous record hash")
++    selected = dict(_validate_selected_shape(dict(selected)))
++    value = {
++        "schema": SCHEMA,
++        "generation": generation,
++        "previous_record_hash": previous_record_hash,
++        "selected": selected,
++    }
++    value["record_hash"] = record_hash(value)
++    return value
++
++
++def serialize_record(record: dict) -> bytes:
++    _validate_record(record, expected_generation=record.get("generation"), expected_previous=record.get("previous_record_hash"))
++    raw = _canonical_json(record) + b"\n"
++    if len(raw) - 1 > MAX_RECORD_BYTES:
++        raise ReleaseError("selection journal record exceeds 64 KiB")
++    return raw
++
++
++def _validate_record(record: object, *, expected_generation: int, expected_previous: str | None) -> dict:
++    if not isinstance(record, dict) or set(record) != _RECORD_FIELDS:
++        raise ReleaseError("selection journal record fields are not exact")
++    if record.get("schema") != SCHEMA or type(record.get("schema")) is not int:
++        raise ReleaseError("selection journal schema is unsupported")
++    generation = record.get("generation")
++    if type(generation) is not int or generation != expected_generation or generation < 1:
++        raise ReleaseError("selection journal generation is not sequential")
++    previous = record.get("previous_record_hash")
++    if generation == 1:
++        if previous is not None or expected_previous is not None:
++            raise ReleaseError("selection journal generation 1 linkage is invalid")
++    elif previous != expected_previous or type(previous) is not str or not _HEX64.fullmatch(previous):
++        raise ReleaseError("selection journal previous hash chain is broken")
++    _validate_selected_shape(record.get("selected"))
++    actual = record.get("record_hash")
++    if type(actual) is not str or not _HEX64.fullmatch(actual) or actual != record_hash(record):
++        raise ReleaseError("selection journal record hash is invalid")
++    return record
++
++
++def parse_journal_bytes(raw: bytes) -> dict:
++    if len(raw) > MAX_JOURNAL_BYTES:
++        raise ReleaseError("selection journal exceeds 16 MiB")
++    newline_terminated = raw.endswith(b"\n")
++    parts = raw.split(b"\n")
++    complete = parts[:-1]
++    incomplete_tail = b"" if newline_terminated else parts[-1]
++    records = []
++    previous = None
++    for index, line in enumerate(complete, 1):
++        if not line:
++            raise ReleaseError("selection journal contains empty committed record")
++        if len(line) > MAX_RECORD_BYTES:
++            raise ReleaseError("selection journal record exceeds 64 KiB")
++        record = _strict_json(line)
++        _validate_record(record, expected_generation=index, expected_previous=previous)
++        records.append(record)
++        previous = record["record_hash"]
++    return {
++        "records": records,
++        "head": records[-1] if records else None,
++        "incomplete_tail_ignored": bool(incomplete_tail),
++        "newline_terminated": newline_terminated,
++    }
++
++
++def _read_regular_nofollow(path: Path, *, limit: int) -> bytes:
++    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
++    descriptor = os.open(path, flags)
++    try:
++        info = os.fstat(descriptor)
++        if not stat.S_ISREG(info.st_mode):
++            raise ReleaseError("selection journal is not a regular file")
++        if info.st_size > limit:
++            raise ReleaseError("selection journal exceeds 16 MiB")
++        chunks, total = [], 0
++        while True:
++            block = os.read(descriptor, min(1024 * 1024, limit + 1 - total))
++            if not block:
++                break
++            chunks.append(block)
++            total += len(block)
++            if total > limit:
++                raise ReleaseError("selection journal exceeds 16 MiB")
++        return b"".join(chunks)
++    finally:
++        os.close(descriptor)
++
++
++def read_journal(path: Path) -> dict:
++    path = Path(path).absolute()
++    return parse_journal_bytes(_read_regular_nofollow(path, limit=MAX_JOURNAL_BYTES))
++
++
++def append_generation(path: Path, selected: dict, *, expected_generation: int | None, expected_hash: str | None) -> dict:
++    path = Path(path).absolute()
++    current = read_journal(path)["head"]
++    if current is None:
++        if expected_generation is not None or expected_hash is not None:
++            raise ReleaseError("selection journal CAS mismatch")
++        generation, previous = 1, None
++    else:
++        if current["generation"] != expected_generation or current["record_hash"] != expected_hash:
++            raise ReleaseError("selection journal CAS mismatch")
++        generation, previous = current["generation"] + 1, current["record_hash"]
++    record = make_record(generation, previous, selected)
++    raw = serialize_record(record)
++    if path.stat().st_size + len(raw) > MAX_JOURNAL_BYTES:
++        raise ReleaseError("selection journal exceeds 16 MiB")
++    flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
++    descriptor = os.open(path, flags)
++    try:
++        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
++            raise ReleaseError("selection journal is not a regular file")
++        offset = 0
++        while offset < len(raw):
++            offset += os.write(descriptor, raw[offset:])
++        os.fsync(descriptor)
++    finally:
++        os.close(descriptor)
++    reread = read_journal(path)["head"]
++    if reread != record:
++        raise ReleaseError("selection journal durable read-back mismatch")
++    return record
++
++
++def security_metadata(path: Path) -> dict:
++    path = Path(path)
++    info = path.stat()
++    value = {
++        "uid": info.st_uid,
++        "gid": info.st_gid,
++        "mode": stat.S_IMODE(info.st_mode),
++        "flags": getattr(info, "st_flags", 0),
++        "acl": "",
++        "xattrs": {},
++    }
++    if sys_platform_darwin():
++        names = subprocess.check_output(["/usr/bin/xattr", str(path)], timeout=5, text=True).splitlines()
++        for name in sorted(names):
++            raw = subprocess.check_output(["/usr/bin/xattr", "-px", name, str(path)], timeout=5)
++            value["xattrs"][name] = _sha256(raw)
++        lines = subprocess.check_output(["/bin/ls", "-ldeO", str(path)], timeout=5, text=True).splitlines()
++        value["acl"] = "\n".join(lines[1:])
++    else:
++        for name in sorted(os.listxattr(path)):
++            value["xattrs"][name] = _sha256(os.getxattr(path, name))
++    return value
++
++
++def sys_platform_darwin() -> bool:
++    import sys
++    return sys.platform == "darwin"
++
++
++def security_snapshot_hash(value: dict) -> str:
++    if not isinstance(value, dict) or set(value) != _SECURITY_FIELDS or not isinstance(value.get("xattrs"), dict):
++        raise ReleaseError("selector security baseline fields are not exact")
++    return _sha256(json.dumps(value, sort_keys=True).encode())
++
++
++def validate_security_baseline(
++    path: Path,
++    expected: dict,
++    *,
++    metadata_reader: Callable[[Path], dict] | None = None,
++    metadata_hasher: Callable[[Path], str] | None = None,
++) -> str:
++    if not isinstance(expected, dict) or set(expected) != _SECURITY_FIELDS or not isinstance(expected.get("xattrs"), dict):
++        raise ReleaseError("selector security baseline fields are not exact")
++    reader = metadata_reader or security_metadata
++    hasher = metadata_hasher or metadata_hash
++    observed = reader(Path(path))
++    if observed != expected:
++        raise ReleaseError("selector security metadata drift")
++    expected_hash = security_snapshot_hash(expected)
++    if hasher(Path(path)) != expected_hash:
++        raise ReleaseError("selector security metadata hash drift")
++    return expected_hash
++
++
++def _manifest(path: Path) -> dict:
++    raw = _read_regular_nofollow(path, limit=2 * 1024 * 1024)
++    try:
++        value = json.loads(raw)
++    except json.JSONDecodeError as exc:
++        raise ReleaseError("selected release manifest is invalid") from exc
++    if not isinstance(value, dict):
++        raise ReleaseError("selected release manifest is invalid")
++    return value
++
++
++def _canonical_direct_child(release: Path, releases_root: Path) -> tuple[Path, Path]:
++    releases_root = Path(releases_root)
++    if not releases_root.is_absolute():
++        raise ReleaseError("releases root must be absolute")
++    root = releases_root.resolve(strict=True)
++    if releases_root != root:
++        raise ReleaseError("releases root must be canonical")
++    release = Path(release)
++    if not release.is_absolute():
++        raise ReleaseError("selected release path must be absolute")
++    resolved = release.resolve(strict=True)
++    if release != resolved or resolved.parent != root:
++        raise ReleaseError("selected release must be a canonical direct child of releases root")
++    return resolved, root
++
++
++def verify_execution_paths(identity: dict, releases_root: Path) -> None:
++    release, _ = _canonical_direct_child(Path(identity["release"]), releases_root)
++    for name in ("repo", "executable", "launcher", "site"):
++        path = Path(identity[name])
++        if not path.is_absolute() or path != path.resolve(strict=True) or not path.is_relative_to(release):
++            raise ReleaseError("selected execution path escapes selected release: " + name)
++    if not Path(identity["repo"]).is_dir() or not Path(identity["site"]).is_dir():
++        raise ReleaseError("selected release runtime directories are invalid")
++    if not Path(identity["executable"]).is_file() or not Path(identity["launcher"]).is_file():
++        raise ReleaseError("selected release execution files are invalid")
++
++
++def validate_selected_identity(selected: dict, releases_root: Path) -> dict:
++    selected = dict(_validate_selected_shape(dict(selected)))
++    release, _ = _canonical_direct_child(Path(selected["release"]), releases_root)
++    manifest = _manifest(release / "manifest.json")
++    if manifest.get("schema") != 1 or manifest.get("target") != "darwin-arm64":
++        raise ReleaseError("selected release manifest/runtime target is unsupported")
++    source = manifest.get("source")
++    runtime = manifest.get("runtime")
++    if not isinstance(source, dict) or not isinstance(runtime, dict):
++        raise ReleaseError("selected release manifest/runtime identity is unsupported")
++    if source.get("commit") != selected["commit"] or source.get("tree") != selected["tree"]:
++        raise ReleaseError("selected release commit/tree mismatch")
++    if not _HEX40.fullmatch(str(source.get("commit", ""))) or not _HEX40.fullmatch(str(source.get("tree", ""))):
++        raise ReleaseError("selected release source identity is invalid")
++    from hermes_cli.gateway_release import candidate_identity
++
++    recomputed = candidate_identity(release)
++    if recomputed != selected:
++        raise ReleaseError("stored selected release identity does not match recomputed identity")
++    verify_execution_paths(recomputed, releases_root)
++    return recomputed
++
++
++def startup_target(
++    journal: Path,
++    releases_root: Path,
++    security_baseline: dict,
++    *,
++    before_head_recheck: Callable[[], None] | None = None,
++    handoff: Callable[[dict], object] | None = None,
++    metadata_reader: Callable[[Path], dict] | None = None,
++    metadata_hasher: Callable[[Path], str] | None = None,
++) -> dict:
++    validate_security_baseline(journal, security_baseline, metadata_reader=metadata_reader, metadata_hasher=metadata_hasher)
++    first = read_journal(journal)["head"]
++    if first is None:
++        raise ReleaseError("selection journal has no committed generation")
++    identity = validate_selected_identity(first["selected"], releases_root)
++    if before_head_recheck is not None:
++        before_head_recheck()
++    validate_security_baseline(journal, security_baseline, metadata_reader=metadata_reader, metadata_hasher=metadata_hasher)
++    second = read_journal(journal)["head"]
++    if second is None or second["generation"] != first["generation"] or second["record_hash"] != first["record_hash"]:
++        raise ReleaseError("selection journal changed before execution handoff")
++    if second["selected"] != first["selected"]:
++        raise ReleaseError("selection journal identity changed before execution handoff")
++    verify_execution_paths(identity, releases_root)
++    target = {
++        "generation": second["generation"],
++        "record_hash": second["record_hash"],
++        **identity,
++    }
++    if handoff is not None:
++        handoff(target)
++    return target
