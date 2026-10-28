@@ -10,6 +10,7 @@ import pytest
 
 from hermes_cli.gateway_release import SelectorReleaseTransaction, candidate_identity
 from hermes_cli.gateway_release_errors import ReleaseError
+from hermes_cli import gateway_release
 from hermes_cli import gateway_launchd
 from hermes_cli import gateway_release_config
 from hermes_cli import gateway_release_selector as selector
@@ -382,3 +383,101 @@ def test_static_launchd_contract_is_release_independent():
 def test_threat_model_retains_trusted_owner_limit():
     text = selector.TRUSTED_OWNER_LIMIT.lower()
     assert "same-uid" in text and "owning uid" in text and "uf_append" in text
+
+
+# D-156 real CLI dispatch coverage.
+def _dispatch_double(kind, events):
+    class TransactionDouble:
+        def __init__(self, receipt):
+            events.append((kind, "init", str(receipt)))
+            self.data = {"state": "TEST_DOUBLE"}
+
+        def _run(self, action):
+            events.append((kind, action))
+            return {"dispatch": kind, "action": action}
+
+        def check(self):
+            return self._run("check")
+
+        def activate(self):
+            return self._run("activate")
+
+        def rollback(self):
+            return self._run("rollback")
+
+        def accept(self):
+            return self._run("accept")
+
+        def execute(self):
+            return self._run("execute")
+
+    return TransactionDouble
+
+
+def _run_real_cli_dispatch(tmp_path, monkeypatch, capsys, receipt_value, *, action="check", raw=False):
+    events = []
+    monkeypatch.setattr(gateway_release, "SelectorReleaseTransaction", _dispatch_double("selector", events))
+    monkeypatch.setattr(gateway_release, "ReleaseTransaction", _dispatch_double("legacy", events))
+    receipt = tmp_path / "receipt.json"
+    if raw:
+        receipt.write_text(receipt_value)
+    else:
+        receipt.write_text(json.dumps(receipt_value))
+    rc = gateway_release.main([action, "--receipt", str(receipt)])
+    output = json.loads(capsys.readouterr().out)
+    return rc, output, events
+
+
+def test_cli_dispatch_schema2_static_selector_uses_selector_transaction(tmp_path, monkeypatch, capsys):
+    rc, output, events = _run_real_cli_dispatch(
+        tmp_path, monkeypatch, capsys,
+        {"schema": 2, "mode": "STATIC_SELECTOR_V1"}, action="activate",
+    )
+    assert rc == 0
+    assert output["ok"] is True and output["dispatch"] == "selector" and output["action"] == "activate"
+    assert [event[:2] for event in events] == [("selector", "init"), ("selector", "activate")]
+    assert not any(event[0] == "legacy" for event in events)
+
+
+def test_cli_dispatch_schema1_without_mode_uses_legacy_transaction(tmp_path, monkeypatch, capsys):
+    rc, output, events = _run_real_cli_dispatch(
+        tmp_path, monkeypatch, capsys,
+        {"schema": 1}, action="rollback",
+    )
+    assert rc == 0
+    assert output["ok"] is True and output["dispatch"] == "legacy" and output["action"] == "rollback"
+    assert [event[:2] for event in events] == [("legacy", "init"), ("legacy", "rollback")]
+    assert not any(event[0] == "selector" for event in events)
+
+
+@pytest.mark.parametrize("receipt_value", [
+    {"schema": 2},
+    {"schema": 2, "mode": "WRONG"},
+    {"schema": 1, "mode": "STATIC_SELECTOR_V1"},
+    {"schema": 3},
+    {"mode": "STATIC_SELECTOR_V1"},
+])
+def test_cli_dispatch_unknown_or_conflicting_receipts_fail_closed(
+    tmp_path, monkeypatch, capsys, receipt_value
+):
+    rc, output, events = _run_real_cli_dispatch(tmp_path, monkeypatch, capsys, receipt_value)
+    assert rc == 1
+    assert output["ok"] is False and output["state"] == "UNCLASSIFIED"
+    assert "unsupported or ambiguous" in output["error"]
+    assert events == []
+
+
+def test_cli_dispatch_non_object_receipt_fails_closed(tmp_path, monkeypatch, capsys):
+    rc, output, events = _run_real_cli_dispatch(tmp_path, monkeypatch, capsys, ["schema", 2])
+    assert rc == 1
+    assert output["ok"] is False and output["state"] == "UNCLASSIFIED"
+    assert "JSON object" in output["error"]
+    assert events == []
+
+
+def test_cli_dispatch_malformed_json_is_controlled_failure(tmp_path, monkeypatch, capsys):
+    rc, output, events = _run_real_cli_dispatch(tmp_path, monkeypatch, capsys, '{"schema":2', raw=True)
+    assert rc == 1
+    assert output["ok"] is False and output["state"] == "UNCLASSIFIED"
+    assert "unreadable or malformed" in output["error"]
+    assert events == []

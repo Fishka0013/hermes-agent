@@ -1,10 +1,9 @@
 --- a/hermes_cli/gateway_release.py
 +++ b/hermes_cli/gateway_release.py
-@@ -453,8 +453,234 @@
-             if self.data["state"] not in {"PREPARED", "ROLLED_BACK", "ROLLBACK_FAILED", "ACCEPTED"}:
+@@ -454,17 +454,262 @@
                  self.rollback()
              raise
-+
+ 
 +
 +
 +class SelectorReleaseTransaction(ReleaseTransaction):
@@ -67,7 +66,7 @@
 +            data["config_contract"] = config_contract
 +        _json(receipt, data)
 +        return cls(receipt, service=backend, canary_runner=canary_runner)
-+
+ 
 +    @contextmanager
 +    def _owner(self):
 +        import fcntl
@@ -128,7 +127,7 @@
 +        if process and self.service.capture(self.data["previous"]) != self.data["previous_process"]:
 +            raise ReleaseError("Gateway process baseline drift")
 +        return {"ready": rollback_ready, "state": self.data["state"], "rollback_ready": rollback_ready}
- 
++
 +    def _append_selected(self, identity: dict) -> dict:
 +        from hermes_cli import gateway_release_selector as selector
 +        record = selector.append_generation(
@@ -139,7 +138,7 @@
 +        self.data["selection_hash"] = record["record_hash"]
 +        self._check_metadata()
 +        return record
- 
++
 +    def activate(self):
 +        with self._owner() as pending:
 +            if self.data["state"] != "PREPARED":
@@ -232,9 +231,40 @@
 +                self._rollback(pending)
 +                raise ReleaseError("selector candidate acceptance failed; previous release restored") from exc
 +
++def _transaction_class_for_receipt(receipt: Path):
++    """Fail-closed CLI dispatch between legacy and static-selector receipts."""
++    try:
++        data = json.loads(_file(receipt))
++    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
++        raise ReleaseError("release receipt is unreadable or malformed") from exc
++    if not isinstance(data, dict):
++        raise ReleaseError("release receipt must be a JSON object")
++    schema = data.get("schema")
++    if type(schema) is int and schema == 2 and data.get("mode") == "STATIC_SELECTOR_V1":
++        return SelectorReleaseTransaction
++    if type(schema) is int and schema == 1 and "mode" not in data:
++        return ReleaseTransaction
++    raise ReleaseError("unsupported or ambiguous release receipt schema/mode")
++
++
  def main(argv=None):
      parser = argparse.ArgumentParser(description=__doc__)
      parser.add_argument("action", choices=("check", "activate", "rollback", "accept", "execute"))
+     parser.add_argument("--receipt", type=Path, required=True)
+     args = parser.parse_args(argv)
+-    transaction = ReleaseTransaction(args.receipt)
++    transaction = None
+     try:
++        transaction_class = _transaction_class_for_receipt(args.receipt)
++        transaction = transaction_class(args.receipt)
+         result = getattr(transaction, args.action)()
+     except ReleaseError as exc:
+-        print(json.dumps({"ok": False, "error": str(exc), "state": transaction.data["state"]}))
++        state = "UNCLASSIFIED" if transaction is None else transaction.data.get("state", "UNKNOWN")
++        print(json.dumps({"ok": False, "error": str(exc), "state": state}, sort_keys=True))
+         return 1
+     print(json.dumps({"ok": True, **result}, sort_keys=True))
+     return 0
 --- a/hermes_cli/gateway_launchd.py
 +++ b/hermes_cli/gateway_launchd.py
 @@ -455,6 +455,62 @@
