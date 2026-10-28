@@ -51,6 +51,24 @@ def _metadata_hasher(value):
     return lambda _path: digest
 
 
+def _legacy_plist_bytes():
+    value = {
+        "EnvironmentVariables": {"HERMES_HOME": "/Users/yura/.hermes", "HERMES_SUPERVISED_CHILD": "1", "PATH": "/usr/bin:/bin"},
+        "ExitTimeOut": 60,
+        "KeepAlive": {"SuccessfulExit": False},
+        "Label": "ai.hermes.gateway",
+        "LimitLoadToSessionType": ["Aqua", "Background"],
+        "ProgramArguments": ["/usr/bin/osascript", "-e", "exec /Users/yura/.hermes/hermes-agent/.hermes/releases/legacy/bin/hermes"],
+        "RunAtLoad": True,
+        "SoftResourceLimits": {"NumberOfFiles": 4096},
+        "StandardErrorPath": "/Users/yura/.hermes/logs/gateway.error.log",
+        "StandardOutPath": "/Users/yura/.hermes/logs/gateway.log",
+        "ThrottleInterval": 30,
+        "WorkingDirectory": "/Users/yura/.hermes",
+    }
+    return plistlib.dumps(value, fmt=plistlib.FMT_XML, sort_keys=False)
+
+
 def _make_release(releases: Path, name: str, commit_char: str) -> tuple[Path, dict]:
     root = releases / name
     (root / "hermes-agent/tools").mkdir(parents=True)
@@ -318,7 +336,8 @@ def _prepare_transaction(tmp_path, release_pair, monkeypatch):
     selector.append_generation(journal, a, expected_generation=None, expected_hash=None)
     baseline = selector.security_metadata(journal)
     plist = tmp_path / "selector.plist"
-    plist.write_text(gateway_launchd.generate_static_selector_launchd_plist(["/Users/yura/.hermes/foundation/bin/hermes-gateway-selector"]))
+    plist.write_text(gateway_launchd.generate_static_selector_launchd_plist(
+        ["/Users/yura/.hermes/gateway-selector-v1/bin/hermes-gateway-selector"], _legacy_plist_bytes()))
     config = tmp_path / "config.yaml"
     config.write_text("test: true\n")
     home = tmp_path / "home"
@@ -367,17 +386,38 @@ def test_selector_transaction_missing_rollback_identity_not_ready(tmp_path, rele
 
 
 def test_static_launchd_contract_is_release_independent():
-    stable = "/Users/yura/.hermes/foundation/bin/hermes-gateway-selector"
-    text1 = gateway_launchd.generate_static_selector_launchd_plist([stable])
-    text2 = gateway_launchd.generate_static_selector_launchd_plist([stable])
+    stable = "/Users/yura/.hermes/gateway-selector-v1/bin/hermes-gateway-selector"
+    baseline_raw = _legacy_plist_bytes()
+    baseline = plistlib.loads(baseline_raw)
+    text1 = gateway_launchd.generate_static_selector_launchd_plist([stable], baseline_raw)
+    text2 = gateway_launchd.generate_static_selector_launchd_plist([stable], baseline_raw)
     assert text1 == text2
     plist = plistlib.loads(text1.encode())
-    assert plist["Label"] == "ai.hermes.gateway"
+    for key, value in baseline.items():
+        if key != "ProgramArguments":
+            assert plist[key] == value
     assert plist["ProgramArguments"][0] == "/usr/bin/osascript"
-    assert plist["WorkingDirectory"] == "/Users/yura/.hermes"
+    assert plist["EnvironmentVariables"]["PATH"] == baseline["EnvironmentVariables"]["PATH"]
+    assert plist["SoftResourceLimits"]["NumberOfFiles"] == 4096
     assert stable in " ".join(plist["ProgramArguments"])
-    assert "core-v1-binding-iter2-from-9978cfd3" not in text1
-    assert "hnf-production-line-candidate-03" not in text1
+    assert "/Users/yura/.hermes/hermes-agent/.hermes/releases/" not in text1
+
+
+def test_static_launchd_missing_path_rejected():
+    baseline = plistlib.loads(_legacy_plist_bytes())
+    del baseline["EnvironmentVariables"]["PATH"]
+    with pytest.raises(ValueError, match="PATH"):
+        gateway_launchd.generate_static_selector_launchd_plist(["/stable/selector"], plistlib.dumps(baseline))
+
+
+def test_static_launchd_missing_or_invalid_nofile_rejected():
+    baseline = plistlib.loads(_legacy_plist_bytes())
+    baseline["SoftResourceLimits"].pop("NumberOfFiles")
+    with pytest.raises(ValueError, match="NumberOfFiles"):
+        gateway_launchd.generate_static_selector_launchd_plist(["/stable/selector"], plistlib.dumps(baseline))
+    baseline["SoftResourceLimits"]["NumberOfFiles"] = 0
+    with pytest.raises(ValueError, match="NumberOfFiles"):
+        gateway_launchd.generate_static_selector_launchd_plist(["/stable/selector"], plistlib.dumps(baseline))
 
 
 def test_threat_model_retains_trusted_owner_limit():
@@ -481,3 +521,167 @@ def test_cli_dispatch_malformed_json_is_controlled_failure(tmp_path, monkeypatch
     assert output["ok"] is False and output["state"] == "UNCLASSIFIED"
     assert "unreadable or malformed" in output["error"]
     assert events == []
+
+
+# D-160 exact incomplete-tail and interruption recovery coverage.
+def _planned(journal: Path, selected: dict):
+    head = selector.read_journal(journal)["head"]
+    return selector.plan_generation(
+        journal, selected,
+        expected_generation=None if head is None else head["generation"],
+        expected_hash=None if head is None else head["record_hash"],
+    )
+
+
+def test_planned_append_no_tail(tmp_path):
+    journal = tmp_path / "selection.log"
+    journal.write_bytes(b"")
+    plan = _planned(journal, _selected("a"))
+    inode = journal.stat().st_ino
+    record = selector.append_planned_generation(
+        journal, plan["record"], plan["serialized"], expected_generation=None, expected_hash=None)
+    assert record == plan["record"]
+    assert journal.stat().st_ino == inode
+    assert journal.read_bytes() == plan["serialized"]
+
+
+def test_planned_append_recovers_exact_partial_tail(tmp_path):
+    journal = tmp_path / "selection.log"
+    journal.write_bytes(b"")
+    plan = _planned(journal, _selected("a"))
+    prefix = plan["serialized"][:37]
+    journal.write_bytes(prefix)
+    inode = journal.stat().st_ino
+    selector.append_planned_generation(
+        journal, plan["record"], plan["serialized"], expected_generation=None, expected_hash=None)
+    assert journal.stat().st_ino == inode
+    assert journal.read_bytes() == plan["serialized"]
+
+
+def test_planned_append_recovers_missing_final_newline(tmp_path):
+    journal = tmp_path / "selection.log"
+    journal.write_bytes(b"")
+    plan = _planned(journal, _selected("a"))
+    journal.write_bytes(plan["serialized"][:-1])
+    selector.append_planned_generation(
+        journal, plan["record"], plan["serialized"], expected_generation=None, expected_hash=None)
+    assert journal.read_bytes() == plan["serialized"]
+
+
+def test_planned_append_already_committed_is_idempotent(tmp_path):
+    journal = tmp_path / "selection.log"
+    journal.write_bytes(b"")
+    plan = _planned(journal, _selected("a"))
+    selector.append_planned_generation(
+        journal, plan["record"], plan["serialized"], expected_generation=None, expected_hash=None)
+    before = journal.read_bytes()
+    selector.append_planned_generation(
+        journal, plan["record"], plan["serialized"], expected_generation=None, expected_hash=None)
+    assert journal.read_bytes() == before
+    assert len(selector.read_journal(journal)["records"]) == 1
+
+
+def test_planned_append_mismatched_tail_fails_without_mutation(tmp_path):
+    journal = tmp_path / "selection.log"
+    journal.write_bytes(b"")
+    plan = _planned(journal, _selected("a"))
+    journal.write_bytes(b"not-the-planned-prefix")
+    before = journal.read_bytes()
+    inode = journal.stat().st_ino
+    with pytest.raises(ReleaseError, match="incomplete tail"):
+        selector.append_planned_generation(
+            journal, plan["record"], plan["serialized"], expected_generation=None, expected_hash=None)
+    assert journal.read_bytes() == before and journal.stat().st_ino == inode
+
+
+def test_planned_append_wrong_serialized_record_fails_closed(tmp_path):
+    journal = tmp_path / "selection.log"
+    journal.write_bytes(b"")
+    plan = _planned(journal, _selected("a"))
+    with pytest.raises(ReleaseError, match="planned selection bytes"):
+        selector.append_planned_generation(
+            journal, plan["record"], plan["serialized"] + b"x", expected_generation=None, expected_hash=None)
+    assert journal.read_bytes() == b""
+
+
+def test_transaction_plan_is_durable_before_stop(tmp_path, release_pair, monkeypatch):
+    tx, journal, _, _, service = _prepare_transaction(tmp_path, release_pair, monkeypatch)
+    observed = []
+    original_stop = service.stop
+    def checked_stop():
+        durable = json.loads(tx.receipt.read_text())
+        observed.append((durable["state"], durable["planned_selection"]["serialized_sha256"], journal.read_bytes()))
+        original_stop()
+    service.stop = checked_stop
+    tx.activate()
+    assert observed and observed[0][0] == "SELECTION_PLANNED"
+    assert observed[0][2] == selector.serialize_record(selector.read_journal(journal)["records"][0])
+
+
+def test_transaction_stop_failure_writes_no_candidate_generation(tmp_path, release_pair, monkeypatch):
+    tx, journal, _, _, service = _prepare_transaction(tmp_path, release_pair, monkeypatch)
+    before = journal.read_bytes()
+    def fail_stop():
+        raise RuntimeError("stop failed")
+    service.stop = fail_stop
+    with pytest.raises(ReleaseError, match="stop failed before selection journal mutation"):
+        tx.activate()
+    assert journal.read_bytes() == before
+    assert len(selector.read_journal(journal)["records"]) == 1
+
+
+def test_reopen_after_stop_before_append_restores_previous_without_journal_write(tmp_path, release_pair, monkeypatch):
+    tx, journal, _, _, service = _prepare_transaction(tmp_path, release_pair, monkeypatch)
+    tx._plan_candidate_selection()
+    tx._save("PREVIOUS_STOPPED")
+    before = journal.read_bytes()
+    reopened = SelectorReleaseTransaction(tx.receipt, service=service, canary_runner=lambda *a, **k: {})
+    result = reopened.rollback()
+    assert result["generation"] == 1
+    assert journal.read_bytes() == before
+    assert len(selector.read_journal(journal)["records"]) == 1
+
+
+def test_reopen_recovers_partial_candidate_then_appends_new_rollback_generation(tmp_path, release_pair, monkeypatch):
+    tx, journal, a, b, service = _prepare_transaction(tmp_path, release_pair, monkeypatch)
+    tx._plan_candidate_selection()
+    record, raw = tx._planned_candidate()
+    with journal.open("ab") as stream:
+        stream.write(raw[:43])
+        stream.flush()
+        os.fsync(stream.fileno())
+    tx._save("PREVIOUS_STOPPED")
+    reopened = SelectorReleaseTransaction(tx.receipt, service=service, canary_runner=lambda *a, **k: {})
+    reopened.rollback()
+    records = selector.read_journal(journal)["records"]
+    assert [r["selected"]["release"] for r in records] == [a["release"], b["release"], a["release"]]
+    assert [r["generation"] for r in records] == [1, 2, 3]
+
+
+def test_reopen_recognizes_committed_candidate_without_duplicate(tmp_path, release_pair, monkeypatch):
+    tx, journal, a, b, service = _prepare_transaction(tmp_path, release_pair, monkeypatch)
+    tx._plan_candidate_selection()
+    record, raw = tx._planned_candidate()
+    selector.append_planned_generation(journal, record, raw, expected_generation=1, expected_hash=record["previous_record_hash"])
+    tx._save("PREVIOUS_STOPPED")
+    reopened = SelectorReleaseTransaction(tx.receipt, service=service, canary_runner=lambda *a, **k: {})
+    reopened.rollback()
+    records = selector.read_journal(journal)["records"]
+    assert [r["selected"]["release"] for r in records] == [a["release"], b["release"], a["release"]]
+    assert len(records) == 3
+
+
+def test_reopen_unknown_tail_blocks_without_journal_mutation(tmp_path, release_pair, monkeypatch):
+    tx, journal, _, _, service = _prepare_transaction(tmp_path, release_pair, monkeypatch)
+    tx._plan_candidate_selection()
+    with journal.open("ab") as stream:
+        stream.write(b"unknown-tail")
+        stream.flush()
+        os.fsync(stream.fileno())
+    tx._save("PREVIOUS_STOPPED")
+    before = journal.read_bytes()
+    reopened = SelectorReleaseTransaction(tx.receipt, service=service, canary_runner=lambda *a, **k: {})
+    with pytest.raises(ReleaseError, match="blocked"):
+        reopened.rollback()
+    assert journal.read_bytes() == before
+    assert json.loads(tx.receipt.read_text())["state"] == "JOURNAL_BLOCKED"

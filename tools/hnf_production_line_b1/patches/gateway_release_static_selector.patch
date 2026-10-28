@@ -1,9 +1,10 @@
 --- a/hermes_cli/gateway_release.py
 +++ b/hermes_cli/gateway_release.py
-@@ -454,17 +454,262 @@
+@@ -453,18 +453,383 @@
+             if self.data["state"] not in {"PREPARED", "ROLLED_BACK", "ROLLBACK_FAILED", "ACCEPTED"}:
                  self.rollback()
              raise
- 
++
 +
 +
 +class SelectorReleaseTransaction(ReleaseTransaction):
@@ -90,7 +91,7 @@
 +            yield pending
 +        finally:
 +            os.close(fd)
-+
+ 
 +    def _check_metadata(self):
 +        from hermes_cli import gateway_release_selector as selector
 +        selector.validate_security_baseline(Path(self.data["journal"]), self.data["selector_security"])
@@ -112,6 +113,78 @@
 +        except Exception:
 +            return False
 +        return True
++
++    def _plan_candidate_selection(self):
++        from hermes_cli import gateway_release_selector as selector
++        plan = selector.plan_generation(
++            Path(self.data["journal"]), self.data["candidate"],
++            expected_generation=self.data["selection_generation"], expected_hash=self.data["selection_hash"],
++        )
++        record, raw = plan["record"], plan["serialized"]
++        planned = {
++            "target_generation": record["generation"],
++            "previous_record_hash": record["previous_record_hash"],
++            "selected": record["selected"],
++            "record_hash": record["record_hash"],
++            "serialized_sha256": plan["serialized_sha256"],
++            "serialized_b64": base64.b64encode(raw).decode("ascii"),
++        }
++        self._save("SELECTION_PLANNED", planned_selection=planned)
++        durable = json.loads(_file(self.receipt))
++        if durable.get("state") != "SELECTION_PLANNED" or durable.get("planned_selection") != planned:
++            raise ReleaseError("planned selection durable read-back failed")
++        return record
++
++    def _planned_candidate(self):
++        from hermes_cli import gateway_release_selector as selector
++        planned = self.data.get("planned_selection")
++        fields = {"target_generation", "previous_record_hash", "selected", "record_hash", "serialized_sha256", "serialized_b64"}
++        if not isinstance(planned, dict) or set(planned) != fields:
++            raise ReleaseError("selector transaction has no exact planned selection")
++        record = selector.make_record(planned["target_generation"], planned["previous_record_hash"], planned["selected"])
++        if record["record_hash"] != planned["record_hash"]:
++            raise ReleaseError("planned selection record hash drift")
++        try:
++            raw = base64.b64decode(planned["serialized_b64"], validate=True)
++        except Exception as exc:
++            raise ReleaseError("planned selection bytes are invalid") from exc
++        if _hash(raw) != planned["serialized_sha256"] or selector.serialize_record(record) != raw:
++            raise ReleaseError("planned selection serialized bytes drift")
++        return record, raw
++
++    def _commit_planned_candidate(self):
++        from hermes_cli import gateway_release_selector as selector
++        record, raw = self._planned_candidate()
++        committed = selector.append_planned_generation(
++            Path(self.data["journal"]), record, raw,
++            expected_generation=record["generation"] - 1,
++            expected_hash=record["previous_record_hash"],
++        )
++        self.data["selection_generation"] = committed["generation"]
++        self.data["selection_hash"] = committed["record_hash"]
++        self._check_metadata()
++        return committed
++
++    def _planned_journal_state(self):
++        from hermes_cli import gateway_release_selector as selector
++        record, raw = self._planned_candidate()
++        parsed = selector.read_journal(Path(self.data["journal"]))
++        head, tail = parsed["head"], parsed["incomplete_tail"]
++        previous_generation = record["generation"] - 1
++        previous_hash = record["previous_record_hash"]
++        previous_clean = (
++            head is not None
++            and head["generation"] == previous_generation
++            and head["record_hash"] == previous_hash
++            and head["selected"] == self.data["previous"]
++        )
++        if head == record and not tail:
++            return "PLANNED_COMMITTED", record, raw
++        if previous_clean and not tail:
++            return "PREVIOUS_CLEAN", record, raw
++        if previous_clean and tail and len(tail) < len(raw) and raw[:len(tail)] == tail:
++            return "PLANNED_PARTIAL", record, raw
++        return "BLOCKED", record, raw
 +
 +    def check(self, *, process=True):
 +        from hermes_cli import gateway_release_selector as selector
@@ -142,17 +215,23 @@
 +    def activate(self):
 +        with self._owner() as pending:
 +            if self.data["state"] != "PREPARED":
-+                raise ReleaseError("selector transaction is not PREPARED; do not replay activation")
++                raise ReleaseError("selector transaction is not PREPARED; use rollback for interrupted recovery")
 +            _json(pending, {"receipt": str(self.receipt)})
 +            result = self.check()
 +            if not result["rollback_ready"]:
 +                pending.unlink(missing_ok=True)
 +                raise ReleaseError("retained rollback identity is unavailable")
-+            self._save("APPENDING_SELECTION")
++            self._plan_candidate_selection()
 +            try:
-+                record = self._append_selected(self.data["candidate"])
-+                self._save("SELECTED", selection_generation=record["generation"], selection_hash=record["record_hash"])
 +                self.service.stop()
++            except Exception as exc:
++                self._save("STOP_FAILED", failure_kind=type(exc).__name__, failure_error=str(exc))
++                pending.unlink(missing_ok=True)
++                raise ReleaseError("previous Gateway stop failed before selection journal mutation") from exc
++            self._save("PREVIOUS_STOPPED")
++            try:
++                record = self._commit_planned_candidate()
++                self._save("SELECTED", selection_generation=record["generation"], selection_hash=record["record_hash"])
 +                self._save("BOOTSTRAP_REQUESTED", startup_attempt={
 +                    "not_before": time.time(), "candidate_commit": self.data["candidate"]["commit"]})
 +                self.service.start(Path(self.data["selector_plist"]))
@@ -172,7 +251,44 @@
 +            self._save("ROLLBACK_FAILED", rollback_error="retained rollback identity unavailable")
 +            raise ReleaseError("rollback failed; retained rollback identity unavailable")
 +        try:
-+            self._require_head(self.data["candidate"])
++            state, planned_record, _ = self._planned_journal_state()
++            if state == "BLOCKED":
++                restoration = "NOT_ATTEMPTED"
++                try:
++                    captured = self.service.capture(self.data["previous"])
++                    restoration = "ALREADY_RUNNING" if captured else "UNKNOWN"
++                except Exception:
++                    try:
++                        self.service.start(Path(self.data["selector_plist"]))
++                        self.service.verify(self.data["previous"])
++                        restoration = "RESTORED_FROM_COMMITTED_HEAD"
++                    except Exception:
++                        restoration = "FAILED"
++                self._save("JOURNAL_BLOCKED", journal_recovery="UNKNOWN_OR_MISMATCHED_TAIL", service_restoration=restoration)
++                raise ReleaseError("selection journal blocked by unknown or mismatched incomplete state")
++
++            if state == "PREVIOUS_CLEAN":
++                try:
++                    live = self.service.capture(self.data["previous"])
++                except Exception:
++                    self.service.start(Path(self.data["selector_plist"]))
++                    live = self.service.verify(self.data["previous"])
++                self._save("ROLLED_BACK", rollback_process=live, service_rollback="RESTORED",
++                           journal_rollback="NOT_REQUIRED_CANDIDATE_NOT_COMMITTED",
++                           selection_generation=planned_record["generation"] - 1,
++                           selection_hash=planned_record["previous_record_hash"])
++                pending.unlink(missing_ok=True)
++                return {"rolled_back": True, "process": live,
++                        "generation": planned_record["generation"] - 1}
++
++            if state == "PLANNED_PARTIAL":
++                committed = self._commit_planned_candidate()
++                self._save("SELECTED_RECOVERED", selection_generation=committed["generation"],
++                           selection_hash=committed["record_hash"])
++            elif state == "PLANNED_COMMITTED":
++                self.data["selection_generation"] = planned_record["generation"]
++                self.data["selection_hash"] = planned_record["record_hash"]
++
 +            config_error = None
 +            try:
 +                self._certify_config(process=self.data.get("candidate_process"))
@@ -193,6 +309,11 @@
 +                                        else "UNCHANGED"))
 +            pending.unlink(missing_ok=True)
 +            return {"rolled_back": True, "process": live, "generation": record["generation"]}
++        except ReleaseError as exc:
++            if self.data.get("state") == "JOURNAL_BLOCKED":
++                raise
++            self._save("ROLLBACK_FAILED", rollback_error=type(exc).__name__, rollback_exact_error=str(exc))
++            raise ReleaseError("rollback failed; STOP production work") from exc
 +        except Exception as exc:
 +            self._save("ROLLBACK_FAILED", rollback_error=type(exc).__name__, rollback_exact_error=str(exc))
 +            raise ReleaseError("rollback failed; STOP production work") from exc
@@ -267,72 +388,60 @@
      return 0
 --- a/hermes_cli/gateway_launchd.py
 +++ b/hermes_cli/gateway_launchd.py
-@@ -455,6 +455,62 @@
+@@ -10,6 +10,7 @@
+ import contextlib
+ import json
+ import os
++import plistlib
+ import shlex
+ import subprocess
+ import sys
+@@ -454,7 +455,42 @@
+ </dict>
  </plist>
  """
++
  
-+
-+def generate_static_selector_launchd_plist(selector_command: list[str]) -> str:
-+    """Pure future Option-B LaunchAgent definition; never reads or writes a selected release.
-+
-+    The stable command is deliberately injected. Release promotion changes only the
-+    append-only selection journal, so a normal promotion cannot require plist bytes to change.
-+    """
++def generate_static_selector_launchd_plist(selector_command: list[str], baseline_plist: bytes | str) -> str:
++    """Replace only ProgramArguments in an explicitly admitted legacy plist."""
 +    if not selector_command or any(type(part) is not str or not part for part in selector_command):
 +        raise ValueError("stable selector command must be a non-empty argv")
-+    home = Path("/Users/yura/.hermes")
-+    label = "ai.hermes.gateway"
-+    stdout_log, stderr_log = home / "logs/gateway.log", home / "logs/gateway.error.log"
-+    prog_args = launchd_program_arguments(list(selector_command), stdout_log, stderr_log)
-+    prog_args_xml = "\n        ".join(f"<string>{escape(part)}</string>" for part in prog_args)
-+    return f'''<?xml version="1.0" encoding="UTF-8"?>
-+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-+<plist version="1.0">
-+<dict>
-+    <key>Label</key>
-+    <string>{label}</string>
-+    <key>ProgramArguments</key>
-+    <array>
-+        {prog_args_xml}
-+    </array>
-+    <key>WorkingDirectory</key>
-+    <string>{home}</string>
-+    <key>EnvironmentVariables</key>
-+    <dict>
-+        <key>HERMES_HOME</key>
-+        <string>{home}</string>
-+        <key>HERMES_SUPERVISED_CHILD</key>
-+        <string>1</string>
-+    </dict>
-+    <key>LimitLoadToSessionType</key>
-+    <array>
-+        <string>Aqua</string>
-+        <string>Background</string>
-+    </array>
-+    <key>RunAtLoad</key>
-+    <true/>
-+    <key>KeepAlive</key>
-+    <dict>
-+        <key>SuccessfulExit</key>
-+        <false/>
-+    </dict>
-+    <key>ThrottleInterval</key>
-+    <integer>30</integer>
-+    <key>ExitTimeOut</key>
-+    <integer>60</integer>
-+    <key>StandardOutPath</key>
-+    <string>{stdout_log}</string>
-+    <key>StandardErrorPath</key>
-+    <string>{stderr_log}</string>
-+</dict>
-+</plist>
-+'''
++    raw = baseline_plist.encode() if isinstance(baseline_plist, str) else baseline_plist
++    if not isinstance(raw, bytes):
++        raise ValueError("legacy baseline plist must be bytes or text")
++    try:
++        value = plistlib.loads(raw)
++    except Exception as exc:
++        raise ValueError("legacy baseline plist is invalid") from exc
++    required = {
++        "Label", "ProgramArguments", "WorkingDirectory", "EnvironmentVariables",
++        "LimitLoadToSessionType", "RunAtLoad", "KeepAlive", "ThrottleInterval",
++        "ExitTimeOut", "SoftResourceLimits", "StandardOutPath", "StandardErrorPath",
++    }
++    if not isinstance(value, dict) or not required.issubset(value) or value.get("Label") != "ai.hermes.gateway":
++        raise ValueError("legacy baseline plist semantics are incomplete")
++    env = value.get("EnvironmentVariables")
++    if not isinstance(env, dict) or type(env.get("PATH")) is not str or not env["PATH"]:
++        raise ValueError("legacy baseline PATH is required")
++    limits = value.get("SoftResourceLimits")
++    nofile = limits.get("NumberOfFiles") if isinstance(limits, dict) else None
++    if type(nofile) is not int or nofile <= 0:
++        raise ValueError("legacy NumberOfFiles must be a positive integer")
++    stdout_log = Path(value["StandardOutPath"])
++    stderr_log = Path(value["StandardErrorPath"])
++    value["ProgramArguments"] = launchd_program_arguments(list(selector_command), stdout_log, stderr_log)
++    if value["ProgramArguments"][0] != "/usr/bin/osascript":
++        raise ValueError("static selector must retain osascript as responsible executable")
++    result = plistlib.dumps(value, fmt=plistlib.FMT_XML, sort_keys=False).decode("utf-8")
++    if "/Users/yura/.hermes/hermes-agent/.hermes/releases/" in result:
++        raise ValueError("static selector plist retained a selected-release path")
++    return result
  
  def launchd_plist_is_current() -> bool:
      """Check if the installed launchd plist matches the currently generated one."""
 --- /dev/null
 +++ b/hermes_cli/gateway_release_selector.py
-@@ -0,0 +1,368 @@
+@@ -0,0 +1,409 @@
 +"""Static release-selector primitives for the native macOS release foundation.
 +
 +The journal is append-only and trusted-owner scoped.  It detects accidental or
@@ -487,6 +596,7 @@
 +    return {
 +        "records": records,
 +        "head": records[-1] if records else None,
++        "incomplete_tail": incomplete_tail,
 +        "incomplete_tail_ignored": bool(incomplete_tail),
 +        "newline_terminated": newline_terminated,
 +    }
@@ -520,9 +630,13 @@
 +    return parse_journal_bytes(_read_regular_nofollow(path, limit=MAX_JOURNAL_BYTES))
 +
 +
-+def append_generation(path: Path, selected: dict, *, expected_generation: int | None, expected_hash: str | None) -> dict:
++def plan_generation(path: Path, selected: dict, *, expected_generation: int | None, expected_hash: str | None) -> dict:
++    """Prepare exact next-generation bytes without mutating the journal."""
 +    path = Path(path).absolute()
-+    current = read_journal(path)["head"]
++    parsed = read_journal(path)
++    if parsed["incomplete_tail"]:
++        raise ReleaseError("selection journal has an incomplete tail; exact recovery plan required")
++    current = parsed["head"]
 +    if current is None:
 +        if expected_generation is not None or expected_hash is not None:
 +            raise ReleaseError("selection journal CAS mismatch")
@@ -533,7 +647,32 @@
 +        generation, previous = current["generation"] + 1, current["record_hash"]
 +    record = make_record(generation, previous, selected)
 +    raw = serialize_record(record)
-+    if path.stat().st_size + len(raw) > MAX_JOURNAL_BYTES:
++    return {"record": record, "serialized": raw, "serialized_sha256": _sha256(raw)}
++
++
++def append_planned_generation(path: Path, record: dict, serialized: bytes, *, expected_generation: int | None, expected_hash: str | None) -> dict:
++    """Complete only the exact planned append, including interruption recovery."""
++    path = Path(path).absolute()
++    if serialized != serialize_record(record):
++        raise ReleaseError("planned selection bytes do not match planned record")
++    parsed = read_journal(path)
++    head = parsed["head"]
++    tail = parsed["incomplete_tail"]
++    if head == record and not tail:
++        return record
++    if head is None:
++        previous_ok = expected_generation is None and expected_hash is None and record["generation"] == 1 and record["previous_record_hash"] is None
++    else:
++        previous_ok = head["generation"] == expected_generation and head["record_hash"] == expected_hash and record["generation"] == head["generation"] + 1 and record["previous_record_hash"] == head["record_hash"]
++    if not previous_ok:
++        raise ReleaseError("selection journal is not at the planned previous generation")
++    if tail:
++        if len(tail) >= len(serialized) or serialized[:len(tail)] != tail:
++            raise ReleaseError("selection journal incomplete tail does not match exact planned record")
++        suffix = serialized[len(tail):]
++    else:
++        suffix = serialized
++    if path.stat().st_size + len(suffix) > MAX_JOURNAL_BYTES:
 +        raise ReleaseError("selection journal exceeds 16 MiB")
 +    flags = os.O_WRONLY | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
 +    descriptor = os.open(path, flags)
@@ -541,15 +680,26 @@
 +        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
 +            raise ReleaseError("selection journal is not a regular file")
 +        offset = 0
-+        while offset < len(raw):
-+            offset += os.write(descriptor, raw[offset:])
++        while offset < len(suffix):
++            offset += os.write(descriptor, suffix[offset:])
 +        os.fsync(descriptor)
 +    finally:
 +        os.close(descriptor)
-+    reread = read_journal(path)["head"]
-+    if reread != record:
++    reread = read_journal(path)
++    if reread["incomplete_tail"] or reread["head"] != record:
 +        raise ReleaseError("selection journal durable read-back mismatch")
 +    return record
++
++
++def append_generation(path: Path, selected: dict, *, expected_generation: int | None, expected_hash: str | None) -> dict:
++    plan = plan_generation(path, selected, expected_generation=expected_generation, expected_hash=expected_hash)
++    return append_planned_generation(
++        path,
++        plan["record"],
++        plan["serialized"],
++        expected_generation=expected_generation,
++        expected_hash=expected_hash,
++    )
 +
 +
 +def security_metadata(path: Path) -> dict:
