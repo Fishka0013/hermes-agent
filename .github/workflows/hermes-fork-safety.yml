@@ -1,0 +1,41 @@
+name: Hermes Fork Safety Gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hermes-fork-safety-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  fork-safety:
+    name: Hermes fork / safety gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Read-only source checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Diff hygiene
+        run: git diff --check HEAD^1 HEAD
+
+      - name: Self-test the fork safety guard
+        run: python3 -m unittest discover -s tests/tools -p test_hermes_ci_guard.py -v
+
+      - name: Check changed paths, code syntax and obvious secret patterns
+        run: python3 tools/hermes_ci_guard.py --base HEAD^1 --head HEAD
+
+      - name: Test Hermes automatic PR publisher when included
+        shell: bash
+        run: |
+          if [ -f tools/hermes_gh_autopublish.py ]; then
+            test -f tests/tools/test_hermes_gh_autopublish.py
+            python3 -m unittest discover -s tests/tools -p test_hermes_gh_autopublish.py -v
+          fi
