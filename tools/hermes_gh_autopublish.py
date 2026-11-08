@@ -226,6 +226,53 @@ def publish(root, task, title, test_command):
         raise Stop("BRANCH_PUBLISHED_PR_NEEDS_RECONCILIATION_NO_REPUSH")
     print(json.dumps({"status": "PUBLISHED_PR", "branch": branch,
                       "commit": commit, "pr_url": url}, ensure_ascii=False))
+    return url
+
+
+def report_owner_milestone(task, phase, *, pr_url=None, adapter_dir=None):
+    """Best-effort OwnerEvent via the already running Architecture notification ledger.
+
+    Never echo credentials or content. A missing/failed notifier does not turn
+    a successful GitHub delivery into an ambiguous remote mutation.
+    Direct module tests do not call this; only explicit CLI --notify-owner does.
+    """
+    if not TASK_RE.fullmatch(task) or phase not in ("start", "done", "blocked"):
+        return "NOTIFY_INPUT_REJECTED"
+    home = Path.home()
+    directory = (Path(adapter_dir) if adapter_dir is not None
+                 else home / "GPT/Projects/ArchitectureRuntime")
+    if not (directory / "owner_events.py").is_file():
+        return "NOTIFIER_UNAVAILABLE"
+    detail = {
+        "start": "Разработка начата в отдельной рабочей ветке.",
+        "done": "Код проверен и отправлен в GitHub Pull Request.",
+        "blocked": "Автоматическая публикация остановлена; ручная проверка результата.",
+    }[phase]
+    event_type = {"start": "START", "done": "DONE", "blocked": "PARTIAL"}[phase]
+    # A slug, not arbitrary prompt/model output, is exposed to Owner Telegram.
+    title = "HERMES · задача " + task
+    try:
+        import importlib
+        inserted = str(directory) not in sys.path
+        if inserted:
+            sys.path.insert(0, str(directory))
+        try:
+            module = importlib.import_module("owner_events")
+            result = module.emit(
+                directory / "data/architecture.sqlite3",
+                source="Hermes",
+                event_type=event_type,
+                stable_key="github-" + task + "-" + phase,
+                title=title,
+                detail=detail,
+                evidence_locator=pr_url if phase == "done" else None,
+            )
+        finally:
+            if inserted:
+                sys.path.remove(str(directory))
+        return str(result.get("status", "NOTIFIER_UNKNOWN"))
+    except Exception:
+        return "NOTIFY_ERROR"
 
 
 def main():
@@ -236,15 +283,20 @@ def main():
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--title")
     parser.add_argument("--test-command")
+    parser.add_argument("--notify-owner", action="store_true", help="Use existing OwnerEvent/Telegram milestone ledger")
     a = parser.parse_args()
     try:
         root = a.root.expanduser().resolve()
         if a.action == "prepare":
             prepare(a.source.expanduser().resolve(), root, a.task)
+            if a.notify_owner:
+                print("OWNER_NOTIFY=" + report_owner_milestone(a.task, "start"))
         elif a.action == "publish":
             if not a.title or len(a.title) > 120:
                 raise Stop("VALID_PR_TITLE_REQUIRED")
-            publish(root, a.task, a.title, a.test_command)
+            pr_url = publish(root, a.task, a.title, a.test_command)
+            if a.notify_owner:
+                print("OWNER_NOTIFY=" + report_owner_milestone(a.task, "done", pr_url=pr_url))
         else:
             claim = root / ".receipts" / (a.task + ".intent.json")
             print(json.dumps({"task": a.task,
@@ -256,6 +308,8 @@ def main():
                                   "--head", BRANCH_PREFIX + a.task,
                                   "--json", "number,url,state"])}, ensure_ascii=False))
     except Stop as exc:
+        if a.notify_owner and a.action in ("prepare", "publish"):
+            print("OWNER_NOTIFY=" + report_owner_milestone(a.task, "blocked"), file=sys.stderr)
         print("STOP:", str(exc), file=sys.stderr)
         sys.exit(44)
 

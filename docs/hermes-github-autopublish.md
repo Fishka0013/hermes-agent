@@ -23,3 +23,19 @@ does not guarantee detection of every possible secret.
 
 Revoke: stop using the skill and remove the user-level executable;
 any open PR remains visible on GitHub. Deployment is separately authorized.
+
+
+## Existing Owner Telegram milestones
+
+The installed user-level wrapper enables the optional --notify-owner flag.
+After successful prepare, it emits START; only after verified GitHub PR
+creation does it emit DONE. An explicit STOP emits one PARTIAL. Events are
+sent via the existing local ArchitectureRuntime owner_events.emit() and its
+durable SQLite intent/attempt ledger; no bot, token or standalone daemon is
+created. Direct publisher function tests do not send messages. If the
+notification adapter is unavailable, the GitHub result remains truthful and
+the CLI prints OWNER_NOTIFY=NOTIFIER_UNAVAILABLE or NOTIFY_ERROR.
+Each task+phase has a stable OwnerEvent idempotency key. Ambiguous delivery
+must not be blindly retried. This integration depends on the Mac's existing
+ArchitectureRuntime; future VPS/remote execution needs an explicit provider
+adapter and cannot silently assume that directory exists.

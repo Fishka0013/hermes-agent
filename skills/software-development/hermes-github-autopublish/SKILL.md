@@ -33,3 +33,14 @@ perform independent read-only reconciliation.
 Do not merge PRs, push to main, create tags/releases, deploy production, modify
 GitHub settings, expose/change credentials or run paid services. A new approval
 is required for work outside this low-risk PR-only boundary.
+
+## Telegram stage reporting
+
+Use the installed user-level hermes-gh-autopublish wrapper, which enables
+--notify-owner to reuse Architecture OwnerEvent and Hermes native Telegram.
+The successful prepare emits START; a successfully published PR emits DONE;
+a stopped task emits PARTIAL. Do not create separate Telegram bot credentials,
+per-task watcher daemons, or repeated per-command notifications. If you run
+the Python source directly instead of the installed wrapper, pass the
+--notify-owner switch explicitly. Telegram SENT is a transport acknowledgement,
+not proof that Owner read the message.

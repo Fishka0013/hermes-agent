@@ -39,7 +39,7 @@ jobs:
         run: python3 -B -m unittest discover -s tests/tools -p test_hermes_ci_guard.py -v
 
       - name: Test GitHub publisher (including providerless end-to-end)
-        run: python3 -B -m unittest discover -s tests/tools -p 'test_hermes_gh_autopublish*.py' -v
+        run: python3 -B -m unittest discover -s tests/tools -p 'test_hermes_gh*.py' -v
 
       - name: Scan changed files, Python syntax and obvious secrets
         run: python3 -B tools/hermes_ci_guard.py --base HEAD^1 --head HEAD
