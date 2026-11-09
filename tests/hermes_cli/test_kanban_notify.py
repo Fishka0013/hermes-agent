@@ -760,6 +760,9 @@ async def test_notifier_artifact_delivery_skips_missing_files(kanban_home, tmp_p
     """Missing artifact paths are silently skipped — they may have been
     referenced by name only. The notifier must not crash and must still
     deliver any artifacts that do exist."""
+    from tests.sec3_workspace_fixtures import write_model_workspace_config
+
+    write_model_workspace_config(kanban_home, tmp_path)
     import hermes_cli.kanban_db as kb
     from hermes_cli import kanban_db_connect as kbc
     from hermes_cli import kanban_db_notify as kbn
@@ -840,6 +843,9 @@ async def test_notifier_artifact_delivery_skips_missing_files(kanban_home, tmp_p
 async def test_notifier_uploads_review_handoff_artifacts(kanban_home, tmp_path, monkeypatch):
     """A review handoff's files are uploaded from the durable staged copy —
     not the scratch original the reviewer's completion is about to delete."""
+    from tests.sec3_workspace_fixtures import write_model_workspace_config
+
+    write_model_workspace_config(kanban_home, tmp_path)
     import hermes_cli.kanban_db as kb
     from hermes_cli import kanban_db_connect as kbc
     from hermes_cli import kanban_db_notify as kbn

@@ -89,6 +89,9 @@ def _parse_model_path(value: str | os.PathLike[str], *, allow_file_uri: bool) ->
     from agent.file_safety import get_nt_namespace_error
     if get_nt_namespace_error(decoded) or decoded.startswith(("\\\\", "//")):
         raise ModelFilePolicyError("Windows NT/device/UNC namespace paths are not allowed")
+    if os.name == "nt" and decoded[1:2] == ":" and Path(decoded).is_absolute():
+        # A native drive letter is part of a local path, not a URL scheme.
+        return decoded
     parsed = urlparse(decoded)
     if parsed.scheme:
         if parsed.scheme.lower() != "file" or not allow_file_uri:
@@ -426,7 +429,7 @@ def cleanup_expired_model_artifacts(*, now: float | None = None) -> int:
             receipt = base_path / name
             try:
                 receipt = _validated_staging_path(receipt)
-                data = json.loads(receipt.read_text("utf-8"))
+                data = json.loads(receipt.read_text(encoding="utf-8-sig"))
                 expires = float(data.get("expires_at", 0))
                 # A receipt can describe only its sibling artifact, never an arbitrary path.
                 staged = _validated_staging_path(

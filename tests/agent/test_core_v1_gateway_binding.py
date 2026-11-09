@@ -167,7 +167,7 @@ def test_production_policy_is_only_level_a_mac_status():
 
 
 def test_direct_provider_has_no_self_socket_recursion(tmp_path, monkeypatch):
-    import gateway.control_socket as control_socket
+    from gateway import control_socket
 
     monkeypatch.setattr(
         control_socket,
@@ -190,7 +190,7 @@ def test_direct_provider_has_no_self_socket_recursion(tmp_path, monkeypatch):
 
 
 def test_existing_gateway_status_handler_is_not_replaced(monkeypatch):
-    import gateway.control_socket as control_socket
+    from gateway import control_socket
 
     monkeypatch.setattr(control_socket, "build_status_payload", lambda: {"gateway_state": "legacy-status-sentinel"})
     server = control_socket.GatewayControlServer(

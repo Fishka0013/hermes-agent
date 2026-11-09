@@ -73,7 +73,10 @@ class _OpenaiBackendStub:
 
 
 @pytest.fixture
-def openai_backend():
+def openai_backend(tmp_path, monkeypatch):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path)
     stub = _OpenaiBackendStub()
     yield stub
     stub.stop()

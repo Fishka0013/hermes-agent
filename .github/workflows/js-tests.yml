@@ -12,17 +12,12 @@ on:
 jobs:
   check:
     name: JS & TS checks
-    # One 32-core job replaces a 14-leg matrix. The matrix spread about 612s
-    # of check payload over 4-core runners. It paid about 371s of repeated
-    # setup to do it: 14 checkouts, 14 node installs, 14 node_modules
-    # restores.
-    #
-    # One larger runner installs one time. vitest, tsc and eslint each size
-    # their own worker pool from the core count.
-    runs-on: blacksmith-32vcpu-ubuntu-2404
-    timeout-minutes: 30
+    # Each workspace check can use its own worker pool. Share a single install
+    # while bounding concurrent pools on the 4-vCPU runner.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
-      - uses: useblacksmith/checkout@25227e61ff9dafe400e22fa487b673eac4e4409a  # v1
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           ref: ${{ inputs.commit }}
       - name: Set up the locked JS build toolchain
@@ -76,8 +71,23 @@ jobs:
         with:
           command: npm ci
 
-      # Every check runs at the same time. The step fails only after all of
-      # them finish. There are two reasons this is not ``npm run --ws check``.
+      - name: Cache the pinned Electron icon tools from the official release
+        run: |
+          set -euo pipefail
+          cache="$RUNNER_TEMP/electron-builder"
+          archive="$cache/icons@1.2.1/icons-bundle.tar.gz"
+          mkdir -p "$(dirname "$archive")"
+          if ! curl -fsSL --retry 3 --retry-delay 5 --max-time 60 \
+            -H 'Accept: application/octet-stream' -o "$archive.part" \
+            'https://api.github.com/repos/electron-userland/electron-builder-binaries/releases/assets/450200968?download=1'; then
+            curl -fsSL --retry 3 --retry-delay 5 --max-time 60 -o "$archive.part" \
+              'https://github.com/electron-userland/electron-builder-binaries/releases/download/icons%401.2.1/icons-bundle.tar.gz'
+          fi
+          echo "193241afc7c81ab165fa0af15ef0af88f796eb69e8e5bb4249a49310d8be242a  $archive.part" | sha256sum -c -
+          mv "$archive.part" "$archive"
+          echo "ELECTRON_BUILDER_CACHE=$cache" >> "$GITHUB_ENV"
+
+      # The step runs every check and reports all failures together.
       #
       #   * ``--ws`` is serial and stops at the first workspace that fails. A
       #     run then reports one failure, where the matrix this replaced
@@ -94,7 +104,9 @@ jobs:
       # not an empty run, because an empty run reports green after it checks
       # nothing.
       - name: Run all workspace checks
-        run: node .github/scripts/run-workspace-checks.mjs
+        run: node .github/scripts/run-workspace-checks.mjs --concurrency 2
+        env:
+          VITEST_MAX_WORKERS: '2'
       - name: Check the checkout is clean
         # Last step of every job (tests/ci/test_clean_worktree_check.py): a test or CI step that
         # leaves an untracked or modified file in the checkout is reported here. Runs only when

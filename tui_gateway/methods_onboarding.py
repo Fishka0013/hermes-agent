@@ -307,7 +307,7 @@ def _with_onboarding(enabled) -> list[str]:
     is) is spelled out by name: the agent's other toolset gates read the names, as they read None."""
     if enabled is None:
         from toolsets import TOOLSET_SESSION_PLATFORMS, get_all_toolsets
-        enabled = [name for name in get_all_toolsets() if name not in TOOLSET_SESSION_PLATFORMS]
+        enabled = [name for name in get_all_toolsets() if name not in TOOLSET_SESSION_PLATFORMS and name != "computer_use"]
     return [*enabled, "onboarding"]
 
 

@@ -185,6 +185,30 @@ def restore_attachments(payload):
     return {'media_urls': restore_native_media(data['media']), 'media_types': list(data['media_types'])}
 
 
+def read_admitted_images(payload):
+    """Read only content-addressed user images already committed by the owner."""
+    root = _media_root()
+    try:
+        attachments = payload['attachments_v1']
+        images = []
+        for reference, mime in zip(attachments['media'], attachments['media_types'], strict=True):
+            if mime not in _ATTACHMENT_MIMES:
+                raise ValueError('invalid admitted image type')
+            path = _native_media_reference_path(reference, root)
+            with _open_regular(path) as source:
+                size = os.fstat(source.fileno()).st_size
+                if size != reference['size']:
+                    raise ValueError('changed media size')
+                raw = source.read(size + 1)
+            if (len(raw) != size or hashlib.sha256(raw).hexdigest() != reference['sha256']
+                    or sniff_image_mime(raw) != mime):
+                raise ValueError('changed image bytes or type')
+            images.append((path, raw))
+        return images
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        raise RuntimeStoreError('storage_unavailable') from exc
+
+
 def _open_regular(path):
     if not path.is_absolute() or path.is_symlink():
         raise ValueError('native media must be a local regular file')
@@ -509,6 +533,15 @@ def release_unheld_media(db, references, *, retain_history=True):
     return db._execute_write(collect)
 
 
+def _native_media_reference_path(reference, root):
+    if set(reference) != {'path', 'sha256', 'size'}:
+        raise ValueError('invalid media reference')
+    path = Path(reference['path'])
+    if path.parent.parent != root or path.resolve() != path or path.parent.name != reference['sha256']:
+        raise ValueError('foreign media reference')
+    return path
+
+
 def restore_native_media(references):
     if not references:
         return []
@@ -516,12 +549,7 @@ def restore_native_media(references):
     paths = []
     try:
         for reference in references:
-            if set(reference) != {'path', 'sha256', 'size'}:
-                raise ValueError('invalid media reference')
-            path = Path(reference['path'])
-            if (path.parent.parent != root or path.resolve() != path
-                    or path.parent.name != reference['sha256']):
-                raise ValueError('foreign media reference')
+            path = _native_media_reference_path(reference, root)
             with _open_regular(path) as source:
                 if os.fstat(source.fileno()).st_size != reference['size']:
                     raise ValueError('changed media size')

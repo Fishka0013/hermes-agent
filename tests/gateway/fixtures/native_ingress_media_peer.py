@@ -10,6 +10,7 @@ import threading
 import traceback
 
 from shared_authority_peer import ModelPeer
+from tests.sec3_workspace_fixtures import write_model_workspace_config
 from tests.waiting import wait_until
 
 
@@ -264,9 +265,12 @@ if __name__ == '__main__':
     base_url = f'http://127.0.0.1:{peer.server_port}/v1'
     os.environ.update(OPENAI_API_KEY='explicit-loopback-fixture', OPENAI_BASE_URL=base_url,
                       TELEGRAM_ALLOWED_USERS='fixture-user')
-    Path(os.environ['HERMES_HOME'], 'config.yaml').write_text(
+    state = Path(os.environ['HERMES_HOME'])
+    (state / 'config.yaml').write_text(
         f'model:\n  default: local-wire-stub\n  provider: custom\n  base_url: {base_url}\n'
         f'auxiliary:\n  title_generation:\n    enabled: false\nterminal:\n  cwd: {os.environ["HERMES_HOME"]}\n')
+    if sys.argv[1] in {'capture', 'recover'}:
+        write_model_workspace_config(state, state.parent)
     status = 0
     try:
         asyncio.run(probe(sys.argv[1], peer))

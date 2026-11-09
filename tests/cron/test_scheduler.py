@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
+from tests.sec3_workspace_fixtures import configure_model_workspace
 
 from cron.scheduler import (
     SILENT_MARKER,
@@ -377,7 +378,7 @@ class TestDeliverResultWrapping:
     """Verify that cron deliveries are wrapped with header/footer and no longer mirrored."""
 
     def _safe_media_path(self, tmp_path, monkeypatch, name, data=b"media"):
-        root = tmp_path / "media-cache"
+        root = configure_model_workspace(monkeypatch, tmp_path, root=tmp_path / "media-cache")
         media_file = root / name
         media_file.parent.mkdir(parents=True, exist_ok=True)
         media_file.write_bytes(data)
@@ -1678,7 +1679,7 @@ class TestSendMediaViaAdapter:
     """Unit tests for _send_media_via_adapter — routes files to typed adapter methods."""
 
     def _safe_media_path(self, tmp_path, monkeypatch, name, data=b"media"):
-        root = tmp_path / "media-cache"
+        root = configure_model_workspace(monkeypatch, tmp_path, root=tmp_path / "media-cache")
         media_file = root / name
         media_file.parent.mkdir(parents=True, exist_ok=True)
         media_file.write_bytes(data)
@@ -2019,10 +2020,9 @@ class TestSendMediaTimeoutCancelsFuture:
             coro.close()
             return next(futures_iter)
 
-        root = tmp_path / "media-cache"
+        root = configure_model_workspace(monkeypatch, tmp_path, root=tmp_path / "media-cache")
         slow = root / "slow.png"
         fast = root / "fast.mp4"
-        slow.parent.mkdir(parents=True)
         slow.write_bytes(b"slow")
         fast.write_bytes(b"fast")
         monkeypatch.setattr(

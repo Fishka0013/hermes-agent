@@ -141,9 +141,9 @@ class TestCreateSession:
 
     @pytest.mark.parametrize("config, offered, withheld", [
         # agent.disabled_toolsets, in the JSON-string shape `hermes config set` stores (#74582).
-        ({"agent": {"disabled_toolsets": "['code_execution']"}}, "file", "code_execution"),
+        ({"agent": {"disabled_toolsets": "['terminal']"}}, "file", "terminal"),
         # platform_toolsets.acp narrows the surface like every other platform (#79516).
-        ({"platform_toolsets": {"acp": ["file"]}}, "file", "code_execution"),
+        ({"platform_toolsets": {"acp": ["file"]}}, "file", "terminal"),
     ])
     def test_fresh_agent_tool_surface_honours_toolset_config(self, monkeypatch, config, offered, withheld):
         """A fresh ACP agent resolves its tools like the gateway/cron: the real tool surface built from its
@@ -169,7 +169,7 @@ class TestCreateSession:
             return {t["function"]["name"] for t in get_tool_definitions(
                 enabled_toolsets=enabled, disabled_toolsets=disabled, quiet_mode=True)}
 
-        assert set(resolve_toolset(withheld)) <= surface(["hermes-acp"])  # non-vacuous: offered by default
+        assert withheld in surface(["hermes-acp"])  # non-vacuous: offered by default
         names = surface(seen[0]["enabled_toolsets"], seen[0]["disabled_toolsets"])
         assert set(resolve_toolset(offered)) <= names
         assert not names & set(resolve_toolset(withheld))

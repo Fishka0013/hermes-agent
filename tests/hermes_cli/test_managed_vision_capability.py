@@ -116,6 +116,9 @@ def test_webp_transcodes_to_png_for_managed_provider(hermes_home, monkeypatch, t
     SILENTLY — the model confabulates a description of an image it never
     saw. Measured live: the same red square answered 'Red' as PNG and
     'Unseen' as WebP."""
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path, home=hermes_home)
     pytest.importorskip("PIL")
     import io
 
@@ -139,6 +142,9 @@ def test_webp_transcodes_to_png_for_managed_provider(hermes_home, monkeypatch, t
 
 def test_webp_passes_through_for_cloud_providers(hermes_home, monkeypatch, tmp_path):
     """Cloud providers accept WebP natively — no transcode tax for them."""
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path, home=hermes_home)
     pytest.importorskip("PIL")
     from PIL import Image
 

@@ -429,8 +429,13 @@ def test_execute_code_smart_deny_pending_payload_is_one_operation(gw_session, mo
     assert pending["allow_permanent"] is False
 
 
-def test_terminal_serializes_smart_deny_pending_capabilities(monkeypatch):
+def test_terminal_serializes_smart_deny_pending_capabilities(monkeypatch, tmp_path):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
     from tools import terminal_tool as terminal_module
+    from tools.terminal_tool_lifecycle import cleanup_vm
+
+    configure_model_workspace(monkeypatch, tmp_path)
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
 
     monkeypatch.setattr(
         terminal_module,
@@ -446,7 +451,11 @@ def test_terminal_serializes_smart_deny_pending_capabilities(monkeypatch):
         },
     )
 
-    payload = json.loads(terminal_module.terminal_tool(command="rm -rf /tmp/example"))
+    task_id = "smart-deny-pending-payload"
+    try:
+        payload = json.loads(terminal_module.terminal_tool(command="rm -rf /tmp/example", task_id=task_id))
+    finally:
+        cleanup_vm(terminal_module._resolve_container_task_id(task_id))
 
     assert payload["smart_denied"] is True
     assert payload["allow_permanent"] is False

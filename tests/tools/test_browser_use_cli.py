@@ -77,7 +77,7 @@ def _fake_cli(tmp_path, body):
 class TestModeDetection:
     def test_host_harness_does_not_enable_ordinary_model_mode(self, monkeypatch):
         """A dependency being installed does not grant host Python authority."""
-        monkeypatch.setattr("hermes_cli.config.read_raw_config", lambda: {})
+        monkeypatch.setattr("hermes_cli.config.read_raw_config", dict)
         monkeypatch.setattr(bu_cli, "_find_cli", lambda: ["/usr/bin/browser-use"])
         assert bu_cli.is_browser_use_cli_mode() is False
 

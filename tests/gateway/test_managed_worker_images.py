@@ -26,6 +26,7 @@ def test_admitted_images_reach_managed_worker(tmp_path, mode, model):
     url = f'http://127.0.0.1:{peer.server_port}/v1'
     (home / 'config.yaml').write_text(json.dumps({
         'gateway': {'multiplex_profiles': False, 'managed_workers': mode == 'managed'},
+        'security': {'model_workspace_root': str(tmp_path.resolve())},
         'model': {'provider': 'custom', 'default': model, 'base_url': url},
         'agent': {'image_input_mode': 'native'}, 'platform_toolsets': {'cli': []},
         'auxiliary': {'title_generation': {'enabled': False}},
@@ -56,7 +57,9 @@ def test_admitted_images_reach_managed_worker(tmp_path, mode, model):
                     if receipt.get('result', {}).get('status') in ('terminal', 'unknown'):
                         break
                     await asyncio.sleep(.05)
-            assert receipt['result']['outcome'] == 'completed', receipt
+            worker_log = home / 'logs' / 'managed-worker.log'
+            diagnostic = worker_log.read_text(encoding='utf-8-sig')[-4000:] if worker_log.is_file() else ''
+            assert receipt['result'].get('outcome') == 'completed', (receipt, diagnostic)
             import base64
             parts = [part for request in peer.requests for message in request['messages']
                      if message['role'] == 'user' and isinstance(message.get('content'), list)

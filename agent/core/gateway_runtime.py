@@ -207,7 +207,7 @@ class CoreGatewayRuntime:
         self._closed = False
 
     @classmethod
-    def bootstrap(cls, *, home: Path, status_provider: StatusProvider) -> "CoreGatewayRuntime":
+    def bootstrap(cls, *, home: Path, status_provider: StatusProvider) -> CoreGatewayRuntime:
         connection = open_core_database(Path(home))
         try:
             adapter = GatewayInProcessMacStatusAdapter(status_provider)

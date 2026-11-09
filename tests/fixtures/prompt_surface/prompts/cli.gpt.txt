@@ -153,6 +153,7 @@ After difficult/iterative tasks, offer to save as a skill. If a skill you loaded
     - dogfood: Exploratory QA of web apps: find bugs, evidence, reports.
     - github: GitHub via gh CLI: PRs, issues, reviews, repos, auth.
     - hermes-agent-skill-authoring: Author in-repo SKILL.md files: frontmatter and structure.
+    - hermes-github-autopublish: Publish authorized Hermes changes as a pull request.
     - inspecting-hermes-desktop-dom: Read the live Hermes desktop DOM/CSS over CDP.
     - node-inspect-debugger: Debug Node.js via --inspect + Chrome DevTools Protocol CLI.
     - python-debugpy: Debug Python: pdb REPL + debugpy remote (DAP).

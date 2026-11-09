@@ -126,7 +126,7 @@ _MAX_TASK_IMAGES = 8
 
 def _normalize_task_images(
     task: dict, i: int, *, task_id: Optional[str] = None
-) -> tuple[Optional[List[str]], Optional[str]]:
+) -> tuple[Optional[list[str]], Optional[str]]:
     """``(cleaned_list_or_None, None)`` for a task's optional ``images`` (local paths, http(s) or data: URLs), else
     ``(None, error)``. A bare string is wrapped into a one-entry list (small models emit scalars for arrays)."""
     raw = task.get("images")
@@ -141,7 +141,7 @@ def _normalize_task_images(
             f"Task {i} has {len(raw)} images; the per-task limit is {_MAX_TASK_IMAGES}. "
             "Trim to the images the child actually needs to see."
         )
-    cleaned: List[str] = []
+    cleaned: list[str] = []
     for item in raw:
         if not isinstance(item, str) or not item.strip():
             return None, f"Task {i} 'images' entries must be non-empty strings (local file paths or http(s) URLs)."
@@ -165,8 +165,8 @@ def _normalize_task_images(
     return (cleaned or None), None
 
 def _coerce_task_images(
-    task_list: List[Dict[str, Any]], images: Optional[List[str]], *, task_id: Optional[str] = None
-) -> tuple[List[Optional[List[str]]], Optional[str]]:
+    task_list: list[dict[str, Any]], images: Optional[list[str]], *, task_id: Optional[str] = None
+) -> tuple[list[Optional[list[str]]], Optional[str]]:
     """Per-task validated image lists; a malformed list fails the whole call before any child spawns. The legacy
     top-level ``images`` applies to a single task only, like ``output_schema``."""
     task_images: list[Optional[list[str]]] = []

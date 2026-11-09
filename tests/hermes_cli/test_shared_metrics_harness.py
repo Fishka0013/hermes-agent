@@ -12,10 +12,27 @@ import pytest
 from hermes_cli.observability import relay_shared_metrics
 from hermes_cli.observability import shared_metrics_contract as contract
 from hermes_cli.observability import shared_metrics_harness as harness
-from tests.hermes_cli.test_relay_shared_metrics_runtime import (
-    _stored_values,
-    direct_runtime,
-)
+from tests.hermes_cli import test_relay_shared_metrics_runtime as _runtime_tests
+from tests.hermes_cli.test_relay_shared_metrics_runtime import _stored_values
+
+
+direct_runtime = _runtime_tests.direct_runtime
+
+
+@pytest.fixture
+def model_workspace(direct_runtime, tmp_path, monkeypatch):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+    from tools.terminal_tool import _resolve_container_task_id, clear_session_cwd
+    from tools.terminal_tool_lifecycle import cleanup_vm
+
+    configure_model_workspace(monkeypatch, tmp_path, home=tmp_path / "hermes-home")
+    monkeypatch.setenv("TERMINAL_ENV", "local")
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    yield
+    cleanup_vm(_resolve_container_task_id("default"))
+    cleanup_vm(f"host-local-{_resolve_container_task_id('default')}")
+    for task_id in ("t", "harness", "harness-exc"):
+        clear_session_cwd(task_id)
 
 
 def _flush() -> None:
@@ -40,7 +57,7 @@ def _agent(provider="openrouter", model="anthropic/claude-sonnet", **extra):
 
 # ---- file edits ------------------------------------------------------------------------------
 
-def test_patch_and_write_file_count_outcome_and_the_strategy_that_landed(direct_runtime, tmp_path):
+def test_patch_and_write_file_count_outcome_and_the_strategy_that_landed(model_workspace, tmp_path):
     from tools.file_tools import _handle_patch, _handle_write_file
 
     target = tmp_path / "work" / "a.py"
@@ -108,14 +125,14 @@ def test_terminal_outcome_trusts_hermes_flags_not_exit_124():
     assert harness.terminal_outcome({"output": "x"}) is None
 
 
-def test_foreground_terminal_commands_count_by_kind_and_outcome(direct_runtime, tmp_path, monkeypatch):
+def test_foreground_terminal_commands_count_by_kind_and_outcome(model_workspace, tmp_path):
     from tools.terminal_tool import terminal_tool
 
-    monkeypatch.setenv("TERMINAL_ENV", "local")
     results = [json.loads(terminal_tool(command, task_id="harness", timeout=timeout)) for command, timeout in (
-        ("ls /definitely/not/here", 30), ("echo ok", 30), ("sh -c 'exit 124'", 30), ("sleep 5", 1),
+        ("ls ./definitely-not-here || exit 2", 30), ("echo ok", 30),
+        ("bash -c 'exit 124'", 30), ("sleep () { while :; do :; done; }; sleep 5", 1),
     )]
-    assert [r["exit_code"] for r in results] == [2, 0, 124, 124]
+    assert [r["exit_code"] for r in results] == [2, 0, 124, 124], results
     terminal_tool("true", task_id="harness", _host_local=True)  # Hermes' own control plane: never counted
     rows = _rows(tmp_path, contract.TERMINAL_OUTCOME_METRIC, "backend", "command_kind", "outcome")
     assert rows == sorted([
@@ -125,14 +142,13 @@ def test_foreground_terminal_commands_count_by_kind_and_outcome(direct_runtime, 
     assert "definitely" not in json.dumps(_stored_values(tmp_path, contract.TERMINAL_OUTCOME_METRIC))
 
 
-def test_backend_exception_mentioning_timeout_is_not_a_terminal_timeout(direct_runtime, tmp_path, monkeypatch):
+def test_backend_exception_mentioning_timeout_is_not_a_terminal_timeout(model_workspace, tmp_path, monkeypatch):
     from tools.environments.base import BaseEnvironment
     from tools.terminal_tool import terminal_tool
 
     def connect_timeout(self, *a, **k):
         raise RuntimeError("ssh: connect to host example port 22: Connection timeout")
 
-    monkeypatch.setenv("TERMINAL_ENV", "local")
     monkeypatch.setattr(BaseEnvironment, "execute", connect_timeout)
     assert json.loads(terminal_tool("echo hi", task_id="harness-exc"))["exit_code"] == 124  # user-facing result unchanged
     assert not _stored_values(tmp_path, contract.TERMINAL_OUTCOME_METRIC)

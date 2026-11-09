@@ -761,6 +761,6 @@ class TestDisabledToolsetsFilterToolSurface:
             return {line.strip().split(":", 1)[0] for line in agent._cmd_tools("", state).splitlines()[1:]}
 
         state.agent.disabled_toolsets = None
-        assert "execute_code" in listed()
-        state.agent.disabled_toolsets = ["code_execution"]
-        assert "execute_code" not in listed()
+        assert "terminal" in listed()
+        state.agent.disabled_toolsets = ["terminal"]
+        assert "terminal" not in listed()

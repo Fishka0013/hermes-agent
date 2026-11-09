@@ -57,6 +57,7 @@ def daemon(tmp_path, model_peer, request):
     model_url = f"http://127.0.0.1:{model_peer.server_port}/v1"
     config = {
         "gateway": {"multiplex_profiles": False},
+        "security": {"model_workspace_root": str(tmp_path.resolve())},
         "approvals": {"mode": "manual", "timeout": 60},
         "model": {"provider": "custom", "default": "local-wire-stub", "base_url": model_url},
         "auxiliary": {"title_generation": {"enabled": False}},

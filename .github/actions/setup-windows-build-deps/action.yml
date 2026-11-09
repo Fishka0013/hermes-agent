@@ -4,11 +4,35 @@ runs:
   using: composite
   steps:
     - name: Cache ARM64 OpenSSL development files
+      id: openssl-cache
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         # Cache libraries and headers only, not a vcpkg checkout or machine state.
         path: C:\vcpkg\installed\arm64-windows-static-md
         key: windows-build-deps-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/windows-build-deps.ps1', 'scripts/build/windows-deps.ps1') }}
+
+    - name: Cache the pinned Perl archive used by the runner's vcpkg OpenSSL port
+      if: steps.openssl-cache.outputs.cache-hit != 'true'
+      shell: powershell
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $archive = 'C:\vcpkg\downloads\strawberry-perl-5.42.2.1-64bit-portable.zip'
+        $sha256 = '32d83be90cf04b807cfb9477482bc36302cdee6f5b04cf57e81adecbd8f07898'
+        $url = 'https://api.github.com/repos/StrawberryPerl/Perl-Dist-Strawberry/releases/assets/390497423?download=1'
+        if (!(Test-Path -LiteralPath $archive -PathType Leaf)) {
+          New-Item -ItemType Directory -Force -Path (Split-Path $archive) | Out-Null
+          $part = "$archive.part"
+          curl.exe -fsSL --retry 3 --retry-delay 5 --max-time 150 -H 'Accept: application/octet-stream' -o $part $url
+          if ($LASTEXITCODE -ne 0) {
+            $direct = 'https://github.com/StrawberryPerl/Perl-Dist-Strawberry/releases/download/SP_54221_64bit/strawberry-perl-5.42.2.1-64bit-portable.zip'
+            curl.exe -fsSL --retry 3 --retry-delay 5 --max-time 150 -o $part $direct
+            if ($LASTEXITCODE -ne 0) { throw 'Could not download the pinned Strawberry Perl archive' }
+          }
+          if ((Get-FileHash -LiteralPath $part -Algorithm SHA256).Hash -ne $sha256) {
+            throw 'Strawberry Perl archive SHA256 mismatch'
+          }
+          Move-Item -LiteralPath $part -Destination $archive
+        }
 
     - name: Initialize the native build environment
       shell: powershell

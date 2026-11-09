@@ -155,7 +155,7 @@ def _normalize_reference_images(value: Any) -> Optional[list[str]]:
     return [item.strip() for item in value if isinstance(item, str) and item.strip()] or None
 
 
-def _publish_generated_video_result(result: Dict[str, Any], task_id: Optional[str]) -> Dict[str, Any]:
+def _publish_generated_video_result(result: dict[str, Any], task_id: Optional[str]) -> dict[str, Any]:
     """Publish trusted provider outputs before returning a model-addressable path."""
     video = result.get("video")
     if not result.get("success") or not isinstance(video, str) or not video.strip():
@@ -177,7 +177,7 @@ def _publish_generated_video_result(result: Dict[str, Any], task_id: Optional[st
     return {**result, "video": str(published)}
 
 
-def _handle_video_generate(args: Dict[str, Any], **_kw: Any) -> str:
+def _handle_video_generate(args: dict[str, Any], **_kw: Any) -> str:
     prompt = (args.get("prompt") or "").strip()
     image_url = (args.get("image_url") or "").strip() or None
     reference_image_urls = _normalize_reference_images(args.get("reference_image_urls"))

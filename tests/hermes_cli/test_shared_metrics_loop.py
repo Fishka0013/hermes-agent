@@ -12,7 +12,9 @@ from hermes_cli.observability import relay_shared_metrics
 from hermes_cli.observability import shared_metrics_loop as loop
 from hermes_cli.observability.shared_metrics import SharedMetricsStore
 from hermes_constants import reset_hermes_home_override, set_hermes_home_override
-from tests.hermes_cli.test_relay_shared_metrics_runtime import direct_runtime
+from tests.hermes_cli import test_relay_shared_metrics_runtime as _runtime_tests
+
+direct_runtime = _runtime_tests.direct_runtime
 
 _LOOP_METRICS = {
     "hermes.memory.op.count", "hermes.curator.run.count", "hermes.delegation.run.count",
@@ -30,10 +32,18 @@ def _rows(home: Path, metric: str) -> list[tuple[dict, int]]:
 
 
 @pytest.fixture
-def home(direct_runtime, tmp_path):
+def home(direct_runtime, tmp_path, monkeypatch):
+    from tests.sec3_workspace_fixtures import write_model_workspace_config
+
     path = tmp_path / "hermes-home"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    write_model_workspace_config(path, tmp_path)
+    monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+    from tools.terminal_tool import _resolve_container_task_id, clear_session_cwd
+    from tools.terminal_tool_lifecycle import cleanup_vm
+
+    yield path
+    cleanup_vm(_resolve_container_task_id("default"))
+    clear_session_cwd("default")
 
 
 def _memory_store():
@@ -236,7 +246,7 @@ def test_terminal_calls_count_against_the_configured_backend(home):
 def test_foreground_terminal_timeout_is_a_failed_timeout(home):
     from tools.terminal_tool import terminal_tool
 
-    assert json.loads(terminal_tool("sleep 5", timeout=1))["exit_code"] == 124
+    assert json.loads(terminal_tool("while :; do :; done", timeout=1))["exit_code"] == 124
 
     assert _rows(home, "hermes.execution_backend.count") == [
         ({"backend": "local", "error_class": "timeout", "kind": "terminal", "outcome": "failed"}, 1),
@@ -311,6 +321,7 @@ def test_browser_calls_name_the_backend_that_served_them(home):
 def test_browser_tool_backend_is_resolved_from_the_profile_at_call_time(home, monkeypatch):
     import tools.browser_tool as bt
 
+    monkeypatch.setattr(bt, "_ordinary_page_url_probe", lambda _task_id: '{"result": "https://example.invalid/"}')
     handler = bt._routed_handler("browser_back", lambda args, kw: '{"success": true}')
     handler({}, task_id="t")
     monkeypatch.setenv("BROWSER_CDP_URL", "ws://127.0.0.1:9/devtools/browser/x")  # `/browser connect` mid-session

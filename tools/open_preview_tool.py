@@ -24,9 +24,9 @@ def _normalize_target(raw: str) -> str:
         return v
     if re.match(r"^(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:\d+)?(/|$)", v, re.IGNORECASE):
         return "http://" + v
-    if re.match(r"^[^/\\]+\.(?:html?|md|txt|pdf|csv|json|ya?ml|toml|xml|js|ts|css|docx?|xlsx?|pptx?)$", v, re.I):
+    if re.match(r"^[^/\\]+\.(?:html?|md|txt|pdf|csv|json|ya?ml|toml|xml|js|ts|css|docx?|xlsx?|pptx?)$", v, re.IGNORECASE):
         return v
-    if re.match(r"^[\w.-]+\.[a-z]{2,}(:\d+)?(/.*)?$", v, re.I):
+    if re.match(r"^[\w.-]+\.[a-z]{2,}(:\d+)?(/.*)?$", v, re.IGNORECASE):
         return "https://" + v
     return v
 

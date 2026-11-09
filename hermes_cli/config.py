@@ -2109,7 +2109,7 @@ _MODEL_FILE_SECURITY_KEYS = (
 )
 
 
-def get_model_file_security_config() -> Dict[str, Any]:
+def get_model_file_security_config() -> dict[str, Any]:
     """Profile-scoped model-file policy settings; never derived from terminal.cwd."""
     cfg = load_config_readonly()
     # Availability-oriented last-known-good recovery is not file authority.
@@ -2122,7 +2122,7 @@ def get_model_file_security_config() -> Dict[str, Any]:
     return {key: sec.get(key) for key in _MODEL_FILE_SECURITY_KEYS}
 
 
-def _ensure_dict(parent: Dict[str, Any], key: str) -> Dict[str, Any]:
+def _ensure_dict(parent: dict[str, Any], key: str) -> dict[str, Any]:
     """Return ``parent[key]`` as a dict, replacing a missing or non-dict value with ``{}``."""
     child = parent.get(key)
     if not isinstance(child, dict):

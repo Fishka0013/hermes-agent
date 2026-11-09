@@ -86,13 +86,13 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
     return frontmatter, body
 
 
-def skill_matches_platform_list(platforms: Any) -> bool:
-    """Return True when *platforms* is compatible with the current OS."""
+def skill_matches_platform_list(platforms: Any, *, host_platform: str | None = None) -> bool:
+    """Return True when *platforms* is compatible with the specified or current OS."""
     if not platforms:
         return True
     if not isinstance(platforms, list):
         platforms = [platforms]
-    current = sys.platform
+    current = host_platform or sys.platform
     for platform in platforms:
         normalized = str(platform).lower().strip()
         mapped = PLATFORM_MAP.get(normalized, normalized)

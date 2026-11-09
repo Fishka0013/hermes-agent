@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -74,6 +75,9 @@ def test_attach_completes_while_agent_is_still_building(session, tmp_path, metho
     sid, record = session
 
     if method == "file.attach":
+        from tests.sec3_workspace_fixtures import write_model_workspace_config
+
+        write_model_workspace_config(Path(record["profile_home"]), tmp_path)
         target = tmp_path / "notes.txt"
         target.write_text("hello")
         extra = {**extra, "path": str(target)}

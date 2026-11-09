@@ -82,6 +82,9 @@ async def test_send_image_file_hits_attachment_endpoint(
 async def test_standalone_send_text_then_attachments(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path)
     _patch_safe_path(monkeypatch)
     img = tmp_path / "a.png"
     img.write_bytes(b"\x89PNG fake")

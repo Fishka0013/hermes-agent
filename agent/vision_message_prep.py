@@ -104,10 +104,6 @@ class VisionMessagePrepMixin:
 
         vision_source = str(image_url or "")
         is_data_url = vision_source.startswith("data:")
-        cleanup_path: Optional[Path] = None
-        if is_data_url:
-            vision_source, cleanup_path = self._materialize_data_url_for_vision(vision_source)
-
         try:
             from tools.vision_tools import vision_analyze_tool
 
@@ -116,12 +112,6 @@ class VisionMessagePrepMixin:
             description = (result.get("analysis") or "").strip()
         except Exception as e:
             description = f"Image analysis failed: {e}"
-        finally:
-            if cleanup_path and cleanup_path.exists():
-                try:
-                    cleanup_path.unlink()
-                except OSError:
-                    pass
 
         note = f"[The {role_label} attached an image. Here's what it contains:\n{description or 'Image analysis failed.'}]"
         if vision_source and not is_data_url:
