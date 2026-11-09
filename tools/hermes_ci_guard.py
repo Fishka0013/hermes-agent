@@ -80,7 +80,7 @@ def main() -> None:
     out = subprocess.run(
         ["git", "-C", str(root), "diff", "--name-only", "-z",
          "--diff-filter=ACMR", args.base, args.head],
-        capture_output=True, check=True,
+        capture_output=True, check=True, timeout=30,
     ).stdout
     paths = [s.decode("utf-8") for s in out.split(b"\0") if s]
     count = scan(root, paths)

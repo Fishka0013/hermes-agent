@@ -40,7 +40,12 @@ def child_env(monkeypatch, tmp_path):
             yield tmp_path
         finally:
             from tools.code_kernel import shutdown_all_kernels
+            from tools.terminal_tool import _resolve_container_task_id
+            from tools.terminal_tool_lifecycle import cleanup_vm
+
             shutdown_all_kernels()
+            for task_id in ("child-env-test", "authority-test"):
+                cleanup_vm(_resolve_container_task_id(task_id))
             env_passthrough._allowed_env_vars.clear()
             env_passthrough._allowed_env_vars.update(saved_allowed)
 

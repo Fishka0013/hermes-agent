@@ -23,8 +23,6 @@ import uuid
 REPO = "Fishka0013/hermes-agent"
 ORIGIN = "https://github.com/Fishka0013/hermes-agent.git"
 BRANCH_PREFIX = "hermes/auto/"
-DEFAULT_SOURCE = Path.home() / ".hermes" / "hermes-agent"
-DEFAULT_ROOT = Path.home() / ".hermes" / "github-worktrees"
 SECRET_RE = re.compile(
     rb"-----BEGIN [A-Z ]*PRIVATE KEY-----|"
     rb"\bgh[pousr]_[A-Za-z0-9_]{30,}|"
@@ -96,7 +94,7 @@ def changed_paths(w):
     for args in [("ls-files", "-m", "-o", "--exclude-standard", "-z"),
                  ("ls-files", "--deleted", "-z")]:
         raw = subprocess.run(["git", "-C", str(w), *args], check=True,
-                             stdout=subprocess.PIPE).stdout
+                             stdout=subprocess.PIPE, timeout=25).stdout
         names.update(os.fsdecode(n) for n in raw.split(b"\0") if n)
     return sorted(names)
 
@@ -174,7 +172,7 @@ def publish(root, task, title, test_command):
         raise Stop("ALREADY_CLAIMED_NO_RETRY_READ_REMOTE")
     base = remote_main(w)
     if subprocess.run(["git", "-C", str(w), "merge-base", "--is-ancestor", base, "HEAD"],
-                      capture_output=True, check=False).returncode:
+                      capture_output=True, check=False, timeout=25).returncode:
         raise Stop("REMOTE_MAIN_ADVANCED_REBASE_REQUIRED")
     if git(w, "ls-remote", "origin", "refs/heads/" + branch):
         raise Stop("REMOTE_BRANCH_EXISTS_NO_OVERWRITE")
@@ -188,7 +186,8 @@ def publish(root, task, title, test_command):
         if not words or not (re.fullmatch(r"python(?:3(?:\.\d+)?)?", Path(words[0]).name) or Path(words[0]).name in ("pytest", "uv")):
             raise Stop("TEST_COMMAND_NOT_ALLOWED")
         cmd(words, cwd=w, timeout=180)
-    if subprocess.run(["git", "-C", str(w), "diff", "--cached", "--quiet"], check=False).returncode:
+    if subprocess.run(["git", "-C", str(w), "diff", "--cached", "--quiet"],
+                      check=False, timeout=25).returncode:
         git(w, "commit", "-m", "chore(hermes): " + title[:68], timeout=60)
     commit = git(w, "rev-parse", "HEAD")
     if commit == base:
@@ -232,8 +231,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("prepare", "publish", "status"))
     parser.add_argument("--task", required=True)
-    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
-    parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
+    git_workspace = Path.home() / ".hermes"  # health: allow HX001 -- account-wide checkout and worktrees
+    parser.add_argument("--source", type=Path, default=git_workspace / "hermes-agent")
+    parser.add_argument("--root", type=Path, default=git_workspace / "github-worktrees")
     parser.add_argument("--title")
     parser.add_argument("--test-command")
     a = parser.parse_args()

@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from tests.sec3_workspace_fixtures import configure_model_workspace
 from tools.terminal_tool import _get_env_config, _resolve_container_task_id, terminal_tool
 from tools.terminal_tool_lifecycle import cleanup_vm
 
@@ -13,6 +14,7 @@ from tools.terminal_tool_lifecycle import cleanup_vm
 @pytest.mark.platforms("linux", "macos")
 @pytest.mark.parametrize("setting, exported", [(None, "yes"), ("true", "yes"), ("false", "none")])
 def test_local_persistent_controls_exports_but_cwd_always_carries(monkeypatch, tmp_path, setting, exported):
+    configure_model_workspace(monkeypatch, tmp_path)
     monkeypatch.setenv("TERMINAL_ENV", "local")
     monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
     if setting is None:
@@ -36,6 +38,7 @@ def test_local_persistent_controls_exports_but_cwd_always_carries(monkeypatch, t
 def test_local_persistent_defaults_on_and_reaches_the_environment(monkeypatch, tmp_path):
     from tools.terminal_tool_lifecycle import _create_configured_env
 
+    configure_model_workspace(monkeypatch, tmp_path)
     monkeypatch.delenv("TERMINAL_LOCAL_PERSISTENT", raising=False)
     config = _get_env_config()
     assert config["local_persistent"] is True
@@ -66,10 +69,12 @@ def test_profile_functions_survive_only_with_persistence_off(monkeypatch, tmp_pa
     probe = "type hermes_lp_fn >/dev/null 2>&1 && echo fn:yes || echo fn:no"
 
     def run(cmd):
-        return json.loads(terminal_tool(cmd, task_id=task_id))["output"].strip()
+        # The host login shell owns these startup files. The confined model
+        # terminal deliberately uses a disposable home on macOS.
+        return json.loads(terminal_tool(cmd, task_id=task_id, _host_local=True))["output"].strip()
 
     try:
         assert run(probe) == "fn:yes"
         assert run(probe) == later
     finally:
-        cleanup_vm(_resolve_container_task_id(task_id))
+        cleanup_vm(f"host-local-{_resolve_container_task_id(task_id)}")

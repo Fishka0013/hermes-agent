@@ -51,11 +51,35 @@ jobs:
           failure-threshold: warning
 
       - name: Lint shell scripts (shellcheck)
-        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # v2.0.0
-        env:
-          # Severity = error: SC1091 (can't follow sourced script) is info-
-          # level and would otherwise fail when the venv activate script
-          # doesn't exist at lint time.
-          SHELLCHECK_OPTS: --severity=error
-        with:
-          scandir: ./docker
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d "$RUNNER_TEMP/shellcheck.XXXXXX")
+          trap 'rm -rf -- "$work"' EXIT
+          archive="$work/shellcheck.tar.xz"
+          curl -sSfL --retry 3 --retry-delay 5 --max-time 30 \
+            -H 'Accept: application/octet-stream' -o "$archive" \
+            'https://api.github.com/repos/koalaman/shellcheck/releases/assets/279056942?download=1'
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $archive" | sha256sum --check
+          tar -xf "$archive" -C "$work"
+
+          # Preserve shell files and startup files, including executable
+          # extensionless init scripts with a shell shebang.
+          find docker -type f -print0 > "$work/files"
+          result=0
+          checked=0
+          while IFS= read -r -d '' file; do
+            case "${file##*/}" in
+              *.sh|*.shlib|*.bash|*.ksh|*.zsh|.bashrc|bashrc|.bash_aliases|.bash_completion|\
+              .bash_login|.bash_logout|.bash_profile|bash_profile|suid_profile|.zlogin|zlogin|\
+              .zlogout|zlogout|.zprofile|zprofile|.zsenv|zsenv|.zshrc|zshrc|.profile|profile) ;;
+              *.*) continue ;;
+              *)
+                [[ -x "$file" ]] || continue
+                head -n 1 "$file" | grep -Eq '^#!.*[/[:space:]](sh|bash|dash|ksh|zsh|ash)([[:space:]]|$)' || continue
+                ;;
+            esac
+            "$work/shellcheck-v0.11.0/shellcheck" --severity=error --format=gcc "$file" || result=1
+            checked=$((checked + 1))
+          done < "$work/files"
+          test "$checked" -gt 0
+          exit "$result"
