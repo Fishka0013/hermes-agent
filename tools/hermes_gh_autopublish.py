@@ -39,7 +39,7 @@ class Stop(RuntimeError):
 def cmd(argv, *, cwd=None, timeout=25, check=True):
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GCM_INTERACTIVE="never")
     try:
-        p = subprocess.run(argv, cwd=cwd, env=env, capture_output=True, encoding="utf-8",
+        p = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
                            errors="replace", timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         raise Stop("TIMEOUT_UNKNOWN_NO_AUTOMATIC_RETRY") from exc
@@ -94,7 +94,7 @@ def changed_paths(w):
     for args in [("ls-files", "-m", "-o", "--exclude-standard", "-z"),
                  ("ls-files", "--deleted", "-z")]:
         raw = subprocess.run(["git", "-C", str(w), *args], check=True,
-                             stdout=subprocess.PIPE, timeout=25).stdout
+                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, timeout=25).stdout
         names.update(os.fsdecode(n) for n in raw.split(b"\0") if n)
     return sorted(names)
 
@@ -172,7 +172,7 @@ def publish(root, task, title, test_command):
         raise Stop("ALREADY_CLAIMED_NO_RETRY_READ_REMOTE")
     base = remote_main(w)
     if subprocess.run(["git", "-C", str(w), "merge-base", "--is-ancestor", base, "HEAD"],
-                      capture_output=True, check=False, timeout=25).returncode:
+                      stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=25).returncode:
         raise Stop("REMOTE_MAIN_ADVANCED_REBASE_REQUIRED")
     if git(w, "ls-remote", "origin", "refs/heads/" + branch):
         raise Stop("REMOTE_BRANCH_EXISTS_NO_OVERWRITE")
@@ -187,7 +187,7 @@ def publish(root, task, title, test_command):
             raise Stop("TEST_COMMAND_NOT_ALLOWED")
         cmd(words, cwd=w, timeout=180)
     if subprocess.run(["git", "-C", str(w), "diff", "--cached", "--quiet"],
-                      check=False, timeout=25).returncode:
+                      stdin=subprocess.DEVNULL, check=False, timeout=25).returncode:
         git(w, "commit", "-m", "chore(hermes): " + title[:68], timeout=60)
     commit = git(w, "rev-parse", "HEAD")
     if commit == base:

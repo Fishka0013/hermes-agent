@@ -26,6 +26,9 @@ async def _expand(source, text):
 
 @pytest.fixture(autouse=True)
 def workspaces(tmp_path, monkeypatch):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path)
     project, daemon = tmp_path / "project", tmp_path / "daemon-home"
     for folder, body in ((project, "PROJECT-NOTES"), (daemon, "DECOY-NOTES")):
         folder.mkdir()

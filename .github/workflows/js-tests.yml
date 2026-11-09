@@ -71,6 +71,19 @@ jobs:
         with:
           command: npm ci
 
+      - name: Cache the pinned Electron icon tools from the official release
+        run: |
+          set -euo pipefail
+          cache="$RUNNER_TEMP/electron-builder"
+          archive="$cache/icons@1.2.1/icons-bundle.tar.gz"
+          mkdir -p "$(dirname "$archive")"
+          curl -fsSL --retry 3 --retry-delay 5 --max-time 60 \
+            -H 'Accept: application/octet-stream' -o "$archive.part" \
+            'https://api.github.com/repos/electron-userland/electron-builder-binaries/releases/assets/450200968?download=1'
+          echo "193241afc7c81ab165fa0af15ef0af88f796eb69e8e5bb4249a49310d8be242a  $archive.part" | sha256sum -c -
+          mv "$archive.part" "$archive"
+          echo "ELECTRON_BUILDER_CACHE=$cache" >> "$GITHUB_ENV"
+
       # The step runs every check and reports all failures together.
       #
       #   * ``--ws`` is serial and stops at the first workspace that fails. A

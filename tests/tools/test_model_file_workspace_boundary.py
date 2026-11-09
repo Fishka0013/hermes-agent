@@ -161,7 +161,7 @@ def test_registered_filename_search_cannot_escape_authorized_workspace(file_prof
     from model_tools import handle_function_call
     from tools import file_tools
 
-    profiles, outside = file_profiles
+    _profiles, outside = file_profiles
     calls = []
 
     def forbidden_backend(*args, **kwargs):

@@ -159,7 +159,7 @@ class MacOSTerminalConfinement:
             result = subprocess.run(
                 [self.launcher, "-p", self.profile, self.probe], cwd=self.root,
                 env=self.child_env(), stdin=subprocess.DEVNULL, capture_output=True,
-                text=True, close_fds=True, timeout=_SETUP_TIMEOUT,
+                text=True, close_fds=True, timeout=_SETUP_TIMEOUT, check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise TerminalConfinementError("Mac kernel sandbox setup failed") from exc

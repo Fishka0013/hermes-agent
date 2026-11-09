@@ -259,12 +259,12 @@ def test_readonly_component_hardlink_cannot_widen_write_authority(terminal):
     confinement.profile += f"\n(allow file-read* (literal {json.dumps(str(component))}))\n"
     try:
         argv, env, cwd = confinement.launch("/bin/cat " + _quote(component), str(terminal.root))
-        read = subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True, timeout=10)
+        read = subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True, timeout=10, check=False)
         assert read.returncode == 0, read.stderr
         assert read.stdout == "CANARY_RUNTIME"
         link = terminal.root / "component-link.txt"
         argv, env, cwd = confinement.launch("/bin/ln " + _quote(component) + " " + _quote(link), str(terminal.root))
-        denied = subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True, timeout=10)
+        denied = subprocess.run(argv, env=env, cwd=cwd, capture_output=True, text=True, timeout=10, check=False)
         assert denied.returncode != 0
         assert "Operation not permitted" in denied.stderr
         assert not link.exists()

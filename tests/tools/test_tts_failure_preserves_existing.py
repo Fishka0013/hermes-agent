@@ -26,7 +26,10 @@ def _edge_without_session_platform(monkeypatch):
 
 
 @pytest.fixture
-def audio_dir(tmp_path):
+def audio_dir(tmp_path, monkeypatch):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path)
     path = tmp_path / "audio"  # tmp_path also holds the conftest's isolated HERMES_HOME
     path.mkdir()
     return path

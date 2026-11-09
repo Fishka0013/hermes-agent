@@ -54,13 +54,13 @@ class TestGitTrampolineLive:
         bat = _make_broken_trampoline(tmp_path)
         assert update_cmd._git_is_trampoline([str(bat)]) is True
 
-    def test_locate_real_git_finds_runner_git_core(self):
+    def test_locate_real_git_finds_runner_executable(self):
         from hermes_cli import update_cmd
 
         real = update_cmd._locate_real_git()
-        # windows-latest ships Git for Windows under Program Files with the
-        # canonical git-core layout the locator searches first.
-        assert real is not None, "expected git-core git.exe on windows-latest"
+        # The runner ships Git for Windows under Program Files. Its native
+        # executable can be under ucrt64/bin on current images.
+        assert real is not None, "expected a working native Git for Windows executable"
         assert real.exists()
         assert real.name == "git.exe"
         probe = subprocess.run(

@@ -105,6 +105,7 @@ def test_next_managed_turn_reads_the_previous_workers_background_output(tmp_path
     url = f'http://127.0.0.1:{peer.server_port}/v1'
     (home / 'config.yaml').write_text(json.dumps({
         'gateway': {'multiplex_profiles': False, 'managed_workers': True},
+        'security': {'model_workspace_root': str(tmp_path.resolve())},
         'model': {'provider': 'custom', 'default': 'm', 'base_url': url},
         'auxiliary': {'title_generation': {'enabled': False}}, 'approvals': {'mode': 'off'},
         'platform_toolsets': {'cli': ['terminal']}}))

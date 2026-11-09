@@ -138,7 +138,7 @@ def test_static_symlink_escape_is_blocked(staging, monkeypatch, route, source_su
 
 
 def test_model_forged_provenance_and_raw_cache_denied(staging):
-    root, outside, source, _ = staging
+    _root, outside, source, _ = staging
     forged = policy.InternalArtifactSource(source, "model-forged", None, object())
     with pytest.raises(policy.ModelFilePolicyError):
         policy.publish_internal_artifact_for_model(forged)

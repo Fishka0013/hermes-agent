@@ -86,9 +86,12 @@ def test_named_container_profile_uses_its_container_cwd(launch_home, tmp_path, m
     assert not server._session_is_local_backend({"cwd": container, "profile_home": str(profile)})
 
 
-def test_attached_host_file_is_staged_and_agent_sees_container_path(launch_home, monkeypatch):
+def test_attached_host_file_is_staged_and_agent_sees_container_path(launch_home, monkeypatch, tmp_path):
     container = _container_dir()
     _write_cfg(launch_home, f"terminal:\n  backend: docker\n  cwd: {container}\n")
+    from tests.sec3_workspace_fixtures import write_model_workspace_config
+
+    write_model_workspace_config(launch_home, tmp_path)
     report = Path.cwd() / "Downloads" / "report.pdf"
     report.parent.mkdir()
     report.write_bytes(b"%PDF-1.4\x00\x01binary")

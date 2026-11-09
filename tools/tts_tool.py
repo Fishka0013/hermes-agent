@@ -313,7 +313,7 @@ def _session_platform() -> tuple:
 
 
 def _resolve_output_base(
-    output_path: Optional[str], provider: str, command_provider_config: Optional[Dict[str, Any]], want_opus: bool,
+    output_path: Optional[str], provider: str, command_provider_config: Optional[dict[str, Any]], want_opus: bool,
     task_id: Optional[str] = None,
 ) -> tuple:
     """Pick the output file -> ``(Path, None)`` or ``(None, error_json)``.
@@ -374,13 +374,13 @@ def _media_tag(paths: list[str], voice_compatible: bool) -> str:
 
 
 def _publish_tts_paths_for_model(
-    paths: List[str], task_id: Optional[str], *, force_stage: bool = False,
-) -> List[str]:
+    paths: list[str], task_id: Optional[str], *, force_stage: bool = False,
+) -> list[str]:
     from agent.model_file_policy import (
         make_internal_artifact_source, publish_internal_artifact_for_model,
         resolve_model_read_path,
     )
-    published: List[str] = []
+    published: list[str] = []
     for path in paths:
         if not force_stage:
             try:
@@ -396,7 +396,7 @@ def _publish_tts_paths_for_model(
     return published
 
 
-def _publish_requested_tts_outputs(paths: List[str], base_path: Path) -> List[str]:
+def _publish_requested_tts_outputs(paths: list[str], base_path: Path) -> list[str]:
     """Move completed private outputs to freshly confined caller destinations.
 
     Providers, WAV/Opus sidecars, and delivery packing never receive caller paths.

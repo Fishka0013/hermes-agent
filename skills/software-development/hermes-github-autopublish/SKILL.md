@@ -1,7 +1,9 @@
 ---
 name: hermes-github-autopublish
-description: "Automatically deliver authorized Hermes code changes for Fishka0013/hermes-agent as an isolated worktree, tested commit, create-only task branch and GitHub Pull Request, without manual Git commands."
+description: Publish authorized Hermes changes as a pull request.
 version: 1.0.0
+author: Yura (Fishka0013)
+license: MIT
 platforms: [macos, linux]
 metadata:
   hermes:

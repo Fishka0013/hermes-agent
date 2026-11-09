@@ -82,7 +82,7 @@ class TestConfineSourceImages:
         secret = tmp_path.parent / f"{tmp_path.name}-outside-secret"
         secret.write_bytes(b"HOST-PRIVATE-KEY")
         try:
-            url, refs, err = igt._confine_source_images(str(secret), None, "t1")
+            _url, _refs, err = igt._confine_source_images(str(secret), None, "t1")
         finally:
             secret.unlink(missing_ok=True)
         assert err is not None

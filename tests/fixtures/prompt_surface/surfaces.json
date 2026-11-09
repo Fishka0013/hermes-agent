@@ -3,16 +3,14 @@
     "prompt_tokens": {
       "context": 249,
       "stable": 1935,
-      "volatile": 1813
+      "volatile": 1834
     },
-    "tool_tokens": 13277,
+    "tool_tokens": 10799,
     "tools": [
       "browser_back",
-      "browser_cdp",
       "browser_click",
       "browser_console",
       "browser_dialog",
-      "browser_exec",
       "browser_get_images",
       "browser_navigate",
       "browser_press",
@@ -22,7 +20,6 @@
       "browser_vision",
       "clarify",
       "delegate_task",
-      "execute_code",
       "manage_connections",
       "memory",
       "patch",
@@ -46,16 +43,14 @@
     "prompt_tokens": {
       "context": 0,
       "stable": 1445,
-      "volatile": 1813
+      "volatile": 1834
     },
-    "tool_tokens": 13277,
+    "tool_tokens": 10799,
     "tools": [
       "browser_back",
-      "browser_cdp",
       "browser_click",
       "browser_console",
       "browser_dialog",
-      "browser_exec",
       "browser_get_images",
       "browser_navigate",
       "browser_press",
@@ -65,7 +60,6 @@
       "browser_vision",
       "clarify",
       "delegate_task",
-      "execute_code",
       "manage_connections",
       "memory",
       "patch",
@@ -89,16 +83,14 @@
     "prompt_tokens": {
       "context": 0,
       "stable": 1866,
-      "volatile": 1811
+      "volatile": 1833
     },
-    "tool_tokens": 13277,
+    "tool_tokens": 10799,
     "tools": [
       "browser_back",
-      "browser_cdp",
       "browser_click",
       "browser_console",
       "browser_dialog",
-      "browser_exec",
       "browser_get_images",
       "browser_navigate",
       "browser_press",
@@ -108,7 +100,6 @@
       "browser_vision",
       "clarify",
       "delegate_task",
-      "execute_code",
       "manage_connections",
       "memory",
       "patch",
@@ -132,16 +123,14 @@
     "prompt_tokens": {
       "context": 0,
       "stable": 2640,
-      "volatile": 1809
+      "volatile": 1831
     },
-    "tool_tokens": 13433,
+    "tool_tokens": 10955,
     "tools": [
       "browser_back",
-      "browser_cdp",
       "browser_click",
       "browser_console",
       "browser_dialog",
-      "browser_exec",
       "browser_get_images",
       "browser_navigate",
       "browser_press",
@@ -151,7 +140,6 @@
       "browser_vision",
       "clarify",
       "delegate_task",
-      "execute_code",
       "manage_connections",
       "memory",
       "patch",
@@ -175,16 +163,14 @@
     "prompt_tokens": {
       "context": 0,
       "stable": 1445,
-      "volatile": 1813
+      "volatile": 1834
     },
-    "tool_tokens": 13277,
+    "tool_tokens": 10799,
     "tools": [
       "browser_back",
-      "browser_cdp",
       "browser_click",
       "browser_console",
       "browser_dialog",
-      "browser_exec",
       "browser_get_images",
       "browser_navigate",
       "browser_press",
@@ -194,7 +180,6 @@
       "browser_vision",
       "clarify",
       "delegate_task",
-      "execute_code",
       "manage_connections",
       "memory",
       "patch",
@@ -218,16 +203,14 @@
     "prompt_tokens": {
       "context": 0,
       "stable": 1317,
-      "volatile": 1813
+      "volatile": 1835
     },
-    "tool_tokens": 13277,
+    "tool_tokens": 10799,
     "tools": [
       "browser_back",
-      "browser_cdp",
       "browser_click",
       "browser_console",
       "browser_dialog",
-      "browser_exec",
       "browser_get_images",
       "browser_navigate",
       "browser_press",
@@ -237,7 +220,6 @@
       "browser_vision",
       "clarify",
       "delegate_task",
-      "execute_code",
       "manage_connections",
       "memory",
       "patch",
@@ -261,16 +243,14 @@
     "prompt_tokens": {
       "context": 0,
       "stable": 1579,
-      "volatile": 1814
+      "volatile": 1835
     },
-    "tool_tokens": 13912,
+    "tool_tokens": 11434,
     "tools": [
       "browser_back",
-      "browser_cdp",
       "browser_click",
       "browser_console",
       "browser_dialog",
-      "browser_exec",
       "browser_get_images",
       "browser_navigate",
       "browser_press",
@@ -280,7 +260,6 @@
       "browser_vision",
       "clarify",
       "delegate_task",
-      "execute_code",
       "manage_connections",
       "memory",
       "patch",
@@ -305,16 +284,14 @@
     "prompt_tokens": {
       "context": 0,
       "stable": 1349,
-      "volatile": 1814
+      "volatile": 1835
     },
-    "tool_tokens": 13277,
+    "tool_tokens": 10799,
     "tools": [
       "browser_back",
-      "browser_cdp",
       "browser_click",
       "browser_console",
       "browser_dialog",
-      "browser_exec",
       "browser_get_images",
       "browser_navigate",
       "browser_press",
@@ -324,7 +301,6 @@
       "browser_vision",
       "clarify",
       "delegate_task",
-      "execute_code",
       "manage_connections",
       "memory",
       "patch",
@@ -348,16 +324,14 @@
     "prompt_tokens": {
       "context": 0,
       "stable": 1382,
-      "volatile": 1814
+      "volatile": 1836
     },
-    "tool_tokens": 13277,
+    "tool_tokens": 10799,
     "tools": [
       "browser_back",
-      "browser_cdp",
       "browser_click",
       "browser_console",
       "browser_dialog",
-      "browser_exec",
       "browser_get_images",
       "browser_navigate",
       "browser_press",
@@ -367,7 +341,6 @@
       "browser_vision",
       "clarify",
       "delegate_task",
-      "execute_code",
       "manage_connections",
       "memory",
       "patch",

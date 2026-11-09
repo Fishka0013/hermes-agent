@@ -268,9 +268,9 @@ def test_write_landing_after_the_patch_write_gives_no_baseline(tmp_path, task, m
         return result
 
     _read(path, task)
-    monkeypatch.setattr(file_operations.ShellFileOperations, "patch_replace", patch_then_external_write)
-    _replace(path, task, "one", "ONE")
-    monkeypatch.undo()
+    with monkeypatch.context() as race:
+        race.setattr(file_operations.ShellFileOperations, "patch_replace", patch_then_external_write)
+        _replace(path, task, "one", "ONE")
 
     _blocked(_write(path, task, "clobber\n"))
     assert path.read_text() == "ONE\nRACED\n"
@@ -287,9 +287,9 @@ def test_write_landing_before_the_patch_read_gives_no_baseline(tmp_path, task, m
         return original(self, *args, **kwargs)
 
     _read(path, task)
-    monkeypatch.setattr(file_operations.ShellFileOperations, "patch_replace", external_write_then_patch)
-    _replace(path, task, "one", "ONE")
-    monkeypatch.undo()
+    with monkeypatch.context() as race:
+        race.setattr(file_operations.ShellFileOperations, "patch_replace", external_write_then_patch)
+        _replace(path, task, "one", "ONE")
     assert path.read_text() == "ONE\nUNSEEN\n"
 
     _blocked(_write(path, task, "clobber\n"))
@@ -341,4 +341,10 @@ from tests.sec3_workspace_fixtures import configure_model_workspace as _sec3_wor
 
 @_sec3_pytest.fixture(autouse=True)
 def _sec3_positive_workspace(monkeypatch, tmp_path):
-    return _sec3_workspace(monkeypatch, tmp_path)
+    root = _sec3_workspace(monkeypatch, tmp_path)
+    monkeypatch.setenv("TERMINAL_CWD", str(root))
+    from tools.terminal_tool import _resolve_container_task_id
+    from tools.terminal_tool_lifecycle import cleanup_vm
+
+    yield root
+    cleanup_vm(_resolve_container_task_id("default"))

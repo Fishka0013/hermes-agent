@@ -23,7 +23,7 @@ def transport(tmp_path):
         def execute(self, command, timeout=10, **kwargs):
             result = subprocess.run(
                 ["/bin/bash", "-c", command], env=child_env, cwd=directory,
-                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout,
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, check=False,
             )
             return {"output": result.stdout + result.stderr, "returncode": result.returncode}
     registry = ProcessRegistry()

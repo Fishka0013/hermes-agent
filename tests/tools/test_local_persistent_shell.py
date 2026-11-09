@@ -62,6 +62,9 @@ def test_profile_functions_survive_only_with_persistence_off(monkeypatch, tmp_pa
     for rc in (".bashrc", ".bash_profile"):
         (home / rc).write_text("hermes_lp_fn(){ echo FN; }\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("HERMES_REAL_HOME", str(home))
+    monkeypatch.setenv("TERMINAL_HOME_MODE", "real")
+    monkeypatch.setenv("TERMINAL_TEMP_DIR", str(tmp_path))
     monkeypatch.setenv("TERMINAL_ENV", "local")
     monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
     monkeypatch.setenv("TERMINAL_LOCAL_PERSISTENT", setting)

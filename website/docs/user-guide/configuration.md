@@ -2838,6 +2838,15 @@ security:
 
 Earlier releases also had `tirith_*` keys for a bundled command scanner; it was removed and upgrading drops those keys. Content-level command checks are described in [Content-Level Command Checks](security.md#content-level-command-checks).
 
+### Model workspace and inbound attachments
+
+Set `security.model_workspace_root` to an existing, absolute path dedicated to the profile's model-facing file work. Local model file operations covered by the workspace policy are denied while the setting is empty. A session's working directory can narrow how relative paths are resolved inside the workspace. Attachment staging uses the workspace's `.tmp` directory and enforces these positive integer limits:
+
+- `security.model_staging_max_file_bytes` defaults to 52428800 bytes (50 MiB).
+- `security.model_staging_session_quota_bytes` defaults to 268435456 bytes (256 MiB).
+- `security.model_staging_profile_quota_bytes` defaults to 1073741824 bytes (1 GiB).
+- `security.model_staging_ttl_seconds` defaults to 86400 seconds (24 hours).
+
 ## Website Blocklist
 
 Block specific domains from being accessed by the agent's web and browser tools:

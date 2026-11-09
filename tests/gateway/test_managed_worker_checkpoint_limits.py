@@ -60,6 +60,7 @@ def test_managed_worker_trims_checkpoints_to_the_configured_max_snapshots(tmp_pa
     url = f'http://127.0.0.1:{peer.server_port}/v1'
     (home / 'config.yaml').write_text(json.dumps({
         'gateway': {'multiplex_profiles': False, 'managed_workers': True},
+        'security': {'model_workspace_root': str(project.resolve())},
         'model': {'provider': 'custom', 'default': 'cp-model', 'base_url': url},
         'auxiliary': {'title_generation': {'enabled': False}}, 'platform_toolsets': {'cli': ['file']},
         'checkpoints': {'enabled': True, 'max_snapshots': 1}}))

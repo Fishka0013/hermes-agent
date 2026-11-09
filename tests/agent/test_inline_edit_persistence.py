@@ -23,9 +23,8 @@ def test_edit_preview_is_durable_before_emission_and_display_only(
     from agent import secret_scope
     from agent.turn_context import build_api_messages
     from hermes_state import SessionDB
-    from tools.environments.local import LocalEnvironment
-    from tools.file_operations import ShellFileOperations
     from tools.terminal_tool import register_task_env_overrides, clear_task_env_overrides
+    from tools.terminal_tool_lifecycle import cleanup_vm
     from tools import file_tools
     import model_tools
     import tui_gateway.server as progress
@@ -42,20 +41,23 @@ def test_edit_preview_is_durable_before_emission_and_display_only(
     at_emission = []
     monkeypatch.setattr(progress, "_emit_tool_lifecycle", lambda *a: emitted.append(a))
     homes = {tag: tmp_path / tag for tag in ("alpha", "beta")}
-    for home in homes.values():
+    workspaces = {tag: tmp_path / f"workspace-{tag}" for tag in homes}
+    for tag, home in homes.items():
         home.mkdir()
-        (home / "config.yaml").write_text("terminal:\n  backend: local\n", encoding="utf-8")
+        workspace = workspaces[tag]
+        workspace.mkdir()
+        (home / "config.yaml").write_text(
+            f"terminal:\n  backend: local\nsecurity:\n  model_workspace_root: {str(workspace)!r}\n",
+            encoding="utf-8",
+        )
 
     # Same tool identity reused in separate homes: no process-global diff cache.
     for visit, tag in enumerate(("alpha", "beta", "alpha")):
         home = homes[tag]
         scope = contextlib.ExitStack()
         scope.enter_context(progress._session_profile_runtime_scope({"profile_home": str(home)}, hydrate_secrets=False))
-        work = home / f"work-{visit}"
+        work = workspaces[tag] / f"work-{visit}"
         work.mkdir()
-        env = LocalEnvironment(cwd=str(work), timeout=15)
-        ops = ShellFileOperations(env, cwd=str(work))
-        monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id="default": ops)
         path = work / "publish.py"
         before, after = "print('before')\n", f"print('{tag}-{visit}')\n"
         tool_name = "patch" if edit == "patch" else "write_file"
@@ -154,9 +156,9 @@ def test_edit_preview_is_durable_before_emission_and_display_only(
             assert next(m for m in archived if m["id"] == row["id"])["content"] == row["content"]
             assert next(m for m in active if m["role"] == "tool").get("display_metadata") == row.get("display_metadata")
         finally:
+            cleanup_vm(name)
             clear_task_env_overrides(name)
             db.close()
-            env.cleanup()
             scope.close()
 
 

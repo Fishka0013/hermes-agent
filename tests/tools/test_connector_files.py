@@ -87,7 +87,10 @@ class Storage:
 
 
 @pytest.fixture(autouse=True)
-def _fresh_schema_cache(monkeypatch):
+def _fresh_schema_cache(monkeypatch, tmp_path):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path)
     monkeypatch.setattr(files, "_FILE_INPUTS", {})
     for name in ("HERMES_MEDIA_DELIVERY_STRICT", "TERMINAL_ENV", "TERMINAL_DOCKER_VOLUMES", "TERMINAL_CWD"):
         monkeypatch.delenv(name, raising=False)

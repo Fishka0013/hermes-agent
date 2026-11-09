@@ -27,6 +27,7 @@ import difflib
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -34,6 +35,7 @@ import sys
 import tempfile
 from collections import Counter
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -79,7 +81,6 @@ def _pin_environment() -> None:
     socket.socket.connect = refuse  # type: ignore[method-assign]
     socket.create_connection = refuse  # type: ignore[assignment]
     socket.getaddrinfo = refuse  # type: ignore[assignment]
-    sys.platform = "linux"  # skills index ``platforms:`` gate
 
     import hermes_time
     hermes_time.now = lambda: FIXED_NOW  # type: ignore[assignment]
@@ -88,6 +89,7 @@ def _pin_environment() -> None:
     import tools.registry as registry_module
     registry_module._check_fn_cached = lambda _fn: True  # type: ignore[assignment]
     from agent import skill_utils
+    skill_utils.skill_matches_platform_list = partial(skill_utils.skill_matches_platform_list, host_platform="linux")
     skill_utils._ENV_DETECT_CACHE.update({"docker": False, "s6": False})
     # The toolchain probe line reports the host's python/node/pip; it is environment, not code.
     from tools import env_probe
@@ -106,14 +108,8 @@ class _ImportFailures(logging.Handler):
 
 
 def _scrub(text: str, home: Path) -> str:
-    import platform as _platform
-    for raw, token in sorted({
-        str(home / ".hermes"): "<HERMES_HOME>",
-        str(home): "<HOME>",
-        f"{_platform.system()} ({_platform.release()})": "<HOST_OS>",
-    }.items(), key=lambda kv: -len(kv[0])):
-        text = text.replace(raw, token)
-    return text
+    text = text.replace(str(home / ".hermes"), "<HERMES_HOME>").replace(str(home), "<HOME>")
+    return re.sub(r"^Host: [^\n]+$", "Host: <HOST_OS>", text, flags=re.MULTILINE)
 
 
 def _enabled_toolsets(platform: str) -> list[str]:
@@ -198,7 +194,7 @@ def render(out: Path) -> int:
     """Render into *out* from a fresh child process and home, so nothing from the caller's
     environment, config or imported modules reaches the bytes."""
     with tempfile.TemporaryDirectory(prefix="prompt-surface-") as tmp:
-        home = Path(tmp) / "home"
+        home = Path(tmp).resolve() / "home"
         home.mkdir()
         staging = Path(tmp) / "out"
         env = {

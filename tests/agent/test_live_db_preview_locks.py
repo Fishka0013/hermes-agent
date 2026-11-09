@@ -20,7 +20,10 @@ from tests.posix_lock_probe import own_posix_locks
 @pytest.mark.parametrize("route,target_kind", [
     ("file", "main"), ("folder", "directory"), ("desktop", "main"), ("desktop", "shm"),
 ])
-def test_preview_preserves_live_database_locks(tmp_path, route, target_kind):
+def test_preview_preserves_live_database_locks(tmp_path, monkeypatch, route, target_kind):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path)
     path = tmp_path / "state.db"
     text = tmp_path / "normal.txt"
     text.write_text("ordinary readable text", encoding="utf-8")

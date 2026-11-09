@@ -17,6 +17,9 @@ from gateway.session import SessionSource
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path)
     project, daemon = tmp_path / 'project', tmp_path / 'daemon'
     for folder, body in ((project, 'PROJECT-NOTES'), (daemon, 'DECOY-NOTES')):
         folder.mkdir()
@@ -110,6 +113,9 @@ async def _history():
 
 
 def _managed(tmp_path, monkeypatch, text):
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path)
     from gateway import session_managed_worker as managed
     from gateway.session_local import _bypass_policy
     policy = _bypass_policy({'cwd': str(tmp_path), 'model': 'fixture', 'provider': 'custom',

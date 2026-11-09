@@ -58,6 +58,9 @@ class TestMediaSendTimeoutResolution:
 class TestEmptyReasonFallback:
     def _run(self, tmp_path, monkeypatch, exc):
         """Drive _send_media_via_adapter into its generic except handler."""
+        from tests.sec3_workspace_fixtures import configure_model_workspace
+
+        configure_model_workspace(monkeypatch, tmp_path)
         media = tmp_path / "clip.mp3"
         media.write_bytes(b"x")
 

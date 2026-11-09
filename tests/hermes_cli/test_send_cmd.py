@@ -136,10 +136,13 @@ def test_whatsapp_mention_rejections_never_reach_the_bridge(whatsapp_bridge, cap
     assert "mention" in capsys.readouterr().err.lower()
     assert whatsapp_bridge.calls == []
 
-def test_whatsapp_mentions_ride_the_first_bridge_payload_only(whatsapp_bridge, tmp_path, capsys):
+def test_whatsapp_mentions_ride_the_first_bridge_payload_only(whatsapp_bridge, tmp_path, capsys, monkeypatch):
     """Across chunked text and text+media, exactly one bridge payload carries the normalized,
     deduplicated JIDs; a captioned single-media send carries them on the media payload; a bridge
     without native-mention support fails closed instead of silently sending an unmentioned message."""
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path)
     calls = whatsapp_bridge.calls
     image = tmp_path / "photo.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\n")

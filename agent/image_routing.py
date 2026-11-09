@@ -516,6 +516,10 @@ def _file_to_data_url(path: Path) -> Optional[str]:
     except Exception as exc:
         logger.warning("image_routing: failed to read %s — %s", path, exc)
         return None
+    return _image_bytes_to_data_url(path, raw)
+
+
+def _image_bytes_to_data_url(path: Path, raw: bytes) -> Optional[str]:
     mime = _guess_mime(path, raw=raw)
     if mime not in _accepted_mimes():
         if (transcoded := _transcode_to_png(raw)) is None:
@@ -554,12 +558,27 @@ def build_native_content_parts(
             skipped.append(str(raw_path))
     attached += [(u, f"[Image attached: {u}]") for u in ((u or "").strip() for u in image_urls or []) if u]
 
+    return _native_content(user_text, attached), skipped
+
+
+def _native_content(user_text: str, attached: list[tuple[str, str]]) -> list[dict[str, Any]]:
     text = (user_text or "").strip()
     if not attached:
-        return ([{"type": "text", "text": text}] if text else []), skipped
+        return [{"type": "text", "text": text}] if text else []
     combined_text = f"{text or 'What do you see in this image?'}\n\n" + "\n".join(h for _, h in attached)
     image_parts = [{"type": "image_url", "image_url": {"url": u}} for u, _ in attached]
-    return [{"type": "text", "text": combined_text}, *image_parts], skipped
+    return [{"type": "text", "text": combined_text}, *image_parts]
+
+
+def build_admitted_image_content(user_text: str, images: list[tuple[Path, bytes]]) -> list[dict[str, Any]]:
+    """Format validated user image bytes without reopening any path."""
+    attached = []
+    for path, raw in images:
+        data_url = _image_bytes_to_data_url(path, raw)
+        if data_url is None:
+            raise ValueError("managed_attachment_unavailable")
+        attached.append((data_url, f"[Image attached at: {path}]"))
+    return _native_content(user_text, attached)
 
 
 __all__ = ["build_native_content_parts", "decide_image_input_mode", "extract_image_refs"]

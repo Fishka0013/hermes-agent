@@ -192,6 +192,9 @@ def _write_file_call(path):
 def real_loop(tmp_path, monkeypatch):
     """A real AIAgent on the real ``file`` toolset and a real SessionDB; only the provider is scripted.
     Any request that would still leave the process dies on a dead local address."""
+    from tests.sec3_workspace_fixtures import configure_model_workspace
+
+    configure_model_workspace(monkeypatch, tmp_path)
     for var in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "ALL_PROXY", "all_proxy"):
         monkeypatch.setenv(var, _DEAD_LOCAL)
     monkeypatch.setenv("NO_PROXY", "")
@@ -222,8 +225,14 @@ def real_loop(tmp_path, monkeypatch):
         agent.client.chat.completions.create.side_effect = lambda **_kw: pending.pop(0)
         return agent.run_conversation(user_message)
 
-    yield SimpleNamespace(agent=agent, db=db, sid=sid, ledger=tmp_path / "ledger.txt", run=run)
-    db.close()
+    from tools.terminal_tool import _resolve_container_task_id
+    from tools.terminal_tool_lifecycle import cleanup_vm
+
+    try:
+        yield SimpleNamespace(agent=agent, db=db, sid=sid, ledger=tmp_path / "ledger.txt", run=run)
+    finally:
+        cleanup_vm(_resolve_container_task_id("default"))
+        db.close()
 
 
 def _assert_saved_tool_pairs_stay_live(result, db, sid):

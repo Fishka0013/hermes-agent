@@ -67,7 +67,7 @@ def test_xai_current_public_url_contract_blocks_local_before_provider(homes, mon
         raise AssertionError("Local video reached xAI provider")
     monkeypatch.setattr(xai_video_tools, "run_xai_video_edit", forbidden)
     monkeypatch.setattr(xai_video_tools, "run_xai_video_extend", forbidden)
-    home, root, outside = homes[0]
+    home, _root, outside = homes[0]
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     source = outside.as_uri() if path_form == "uri" else str(outside)

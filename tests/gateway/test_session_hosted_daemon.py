@@ -50,6 +50,7 @@ def test_native_room_service_local_member_and_restart(tmp_path):
     base = f'http://127.0.0.1:{model.server_port}/v1'
     (home / 'config.yaml').write_text(json.dumps({
         'gateway': {'multiplex_profiles': False}, 'hosted_rooms': {'profiles': {'two': str(target)}},
+        'security': {'model_workspace_root': str(tmp_path.resolve())},
         'model': {'provider': 'custom', 'default': 'gpt-4o', 'base_url': base, 'supports_vision': True},
         'agent': {'image_input_mode': 'native'},
         'platform_toolsets': {'gui': [], 'bot_room': []},
@@ -127,6 +128,7 @@ def test_room_unknown_discard_releases_only_its_followers(tmp_path):
     base = f'http://127.0.0.1:{model.server_port}/v1'
     (home / 'config.yaml').write_text(json.dumps({
         'gateway': {'multiplex_profiles': False}, 'hosted_rooms': {'profiles': {'two': str(target)}},
+        'security': {'model_workspace_root': str(tmp_path.resolve())},
         'model': {'provider': 'custom', 'default': 'gpt-4o', 'base_url': base, 'supports_vision': True},
         'agent': {'image_input_mode': 'native'},
         'platform_toolsets': {'gui': [], 'bot_room': []},

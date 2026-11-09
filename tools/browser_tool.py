@@ -745,7 +745,7 @@ def _attach_auto_snapshot(response: dict[str, Any], nav_session_key: str) -> Non
         logger.debug("Auto-snapshot after navigate failed: %s", e)
 
 
-def _browser_local_file_error(url: object) -> Optional[Dict[str, Any]]:
+def _browser_local_file_error(url: object) -> Optional[dict[str, Any]]:
     """Reject local-file targets before browser or extension routing."""
     from urllib.parse import unquote, urlparse
     try:

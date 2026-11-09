@@ -22,7 +22,10 @@ def _peer(tmp_path, mode):
 
 @pytest.mark.platforms("linux")
 def test_accepted_media_survives_mutation_cleanup_and_owner_kill(tmp_path):
+    from tests.sec3_workspace_fixtures import write_model_workspace_config
+
     command, env, repo, state = _peer(tmp_path, 'capture')
+    write_model_workspace_config(state, tmp_path)
     with (state / 'owner.log').open('w+') as log:
         child = subprocess.Popen(command, cwd=repo, env=env, stdin=subprocess.DEVNULL,
                                  stdout=log, stderr=subprocess.STDOUT)

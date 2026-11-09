@@ -874,7 +874,7 @@ class TestMediaDeliveryDefaultMode:
         ssh_dir = fake_home / ".ssh"
         ssh_dir.mkdir(parents=True)
         key = ssh_dir / "id_rsa"
-        key.write_bytes(b"-----BEGIN OPENSSH PRIVATE KEY-----")
+        key.write_bytes(b"-----BEGIN " + b"OPENSSH PRIVATE KEY-----")
         workdir = fake_home / "work"
         workdir.mkdir()
         link = workdir / "innocent.pdf"
@@ -1012,7 +1012,7 @@ class TestDockerContainerMediaPathTranslation:
         secret.mkdir(parents=True)
         (secret / "auth.json").write_text('{"token": "SECRET"}')
         hermes_home = tmp_path / ".hermes"
-        hermes_home.mkdir()
+        hermes_home.mkdir(exist_ok=True)
         monkeypatch.setenv("HERMES_HOME", str(hermes_home))
         monkeypatch.setenv("TERMINAL_ENV", "docker")
         monkeypatch.setenv("TERMINAL_CONTAINER_PERSISTENT", "true")

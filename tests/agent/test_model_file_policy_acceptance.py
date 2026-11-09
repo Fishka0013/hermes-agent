@@ -49,7 +49,7 @@ def test_namespace_rejected_before_target_resolution(profile, monkeypatch, raw, 
 
 @pytest.mark.parametrize("producer", ["image", "tts", "browser", "inbound"])
 def test_producer_publication_is_inside_profile_root(profile, monkeypatch, producer):
-    root, home, source = profile
+    root, _home, source = profile
     assert policy.get_model_workspace_root() == root
     with pytest.raises(policy.ModelFilePolicyError):
         policy.resolve_model_read_path(source)
@@ -126,7 +126,7 @@ def test_resolution_and_profile_switch_do_not_widen_root(tmp_path, monkeypatch):
                                   "symlink-read", "symlink-write", "encoded", "null"])
 def test_model_read_write_escape_is_blocked(profile, case):
     from urllib.parse import quote
-    root, home, outside = profile
+    root, _home, outside = profile
     original = outside.read_bytes()
     candidate = outside
     resolver = policy.resolve_model_read_path
@@ -167,7 +167,7 @@ def test_invalid_profile_root_fails_closed(profile, configured_root):
 
 
 def test_native_image_conversion_blocks_before_read(profile, monkeypatch):
-    root, home, source = profile
+    _root, _home, source = profile
     from agent.image_routing import _file_to_data_url
     real_read = Path.read_bytes
     attempts = []
@@ -215,7 +215,7 @@ def test_profile_context_perimeter_a_b_a(tmp_path, monkeypatch):
 
 
 def test_unreadable_config_cannot_reuse_old_file_authority(profile):
-    root, home, source = profile
+    root, home, _source = profile
     assert policy.get_model_workspace_root() == root
     (home / "config.yaml").write_text("security: [")
     with pytest.raises(policy.ModelFilePolicyError):
