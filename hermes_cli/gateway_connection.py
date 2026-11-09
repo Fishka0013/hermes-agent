@@ -154,8 +154,11 @@ class GatewayConnection:
             # Every caller waits out a dial in progress, its own or another thread's.
             if not self._ready.wait(max(deadline - time.monotonic(), 0)):
                 raise GatewayClientError("Gateway connection timed out; no local fallback")
-            if self._error is not None:
-                raise self._error
+            if error := self._error:
+                # The failed dial publishes readiness just before its thread exits.
+                # Let it finish so the next call can start a fresh attempt.
+                thread.join(max(deadline - time.monotonic(), 0))
+                raise error
             if self.client is not None or self.final:
                 return
             # Hung up right after that dial: let its loop end, then dial again.

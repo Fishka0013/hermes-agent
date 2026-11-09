@@ -1,14 +1,14 @@
 ---
-title: "Hermes Github Autopublish"
+title: "Hermes Github Autopublish — Publish authorized Hermes changes as a pull request"
 sidebar_label: "Hermes Github Autopublish"
-description: "Automatically deliver authorized Hermes code changes for Fishka0013/hermes-agent as an isolated worktree, tested commit, create-only task branch and GitHub P..."
+description: "Publish authorized Hermes changes as a pull request"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Hermes Github Autopublish
 
-Automatically deliver authorized Hermes code changes for Fishka0013/hermes-agent as an isolated worktree, tested commit, create-only task branch and GitHub Pull Request, without manual Git commands.
+Publish authorized Hermes changes as a pull request.
 
 ## Skill metadata
 
@@ -17,6 +17,8 @@ Automatically deliver authorized Hermes code changes for Fishka0013/hermes-agent
 | Source | Bundled (installed by default) |
 | Path | `skills/software-development/hermes-github-autopublish` |
 | Version | `1.0.0` |
+| Author | Yura (Fishka0013) |
+| License | MIT |
 | Platforms | macos, linux |
 | Tags | `github`, `autopublish`, `automatic-pr`, `git`, `worktree`, `tests` |
 

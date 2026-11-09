@@ -198,8 +198,11 @@ jobs:
             -m "platforms and not integration" \
             -v --tb=short
         env:
-          # Reserve capacity for the nested PowerShell processes each test starts.
-          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && '3' || '' }}
+          # The desktop hand-off files spawn multiple nested PowerShell processes.
+          # Reserve a core for their startup and use the native smoke lane's
+          # per-file budget without changing any individual test deadline.
+          HERMES_TEST_WORKERS: ${{ matrix.marker == 'windows' && '2' || '' }}
+          HERMES_TEST_FILE_TIMEOUT: ${{ matrix.marker == 'windows' && '900' || '300' }}
           HERMES_TEST_SLICE: ${{ matrix.slice || '' }}
           # Belt-and-suspenders with tests/conftest.py's env blanking: no
           # test may reach a real provider API.

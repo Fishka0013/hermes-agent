@@ -15,7 +15,7 @@ jobs:
     # Each workspace check can use its own worker pool. Share a single install
     # while bounding concurrent pools on the 4-vCPU runner.
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
@@ -77,9 +77,12 @@ jobs:
           cache="$RUNNER_TEMP/electron-builder"
           archive="$cache/icons@1.2.1/icons-bundle.tar.gz"
           mkdir -p "$(dirname "$archive")"
-          curl -fsSL --retry 3 --retry-delay 5 --max-time 60 \
+          if ! curl -fsSL --retry 3 --retry-delay 5 --max-time 60 \
             -H 'Accept: application/octet-stream' -o "$archive.part" \
-            'https://api.github.com/repos/electron-userland/electron-builder-binaries/releases/assets/450200968?download=1'
+            'https://api.github.com/repos/electron-userland/electron-builder-binaries/releases/assets/450200968?download=1'; then
+            curl -fsSL --retry 3 --retry-delay 5 --max-time 60 -o "$archive.part" \
+              'https://github.com/electron-userland/electron-builder-binaries/releases/download/icons%401.2.1/icons-bundle.tar.gz'
+          fi
           echo "193241afc7c81ab165fa0af15ef0af88f796eb69e8e5bb4249a49310d8be242a  $archive.part" | sha256sum -c -
           mv "$archive.part" "$archive"
           echo "ELECTRON_BUILDER_CACHE=$cache" >> "$GITHUB_ENV"
@@ -102,6 +105,8 @@ jobs:
       # nothing.
       - name: Run all workspace checks
         run: node .github/scripts/run-workspace-checks.mjs --concurrency 2
+        env:
+          VITEST_MAX_WORKERS: '2'
       - name: Check the checkout is clean
         # Last step of every job (tests/ci/test_clean_worktree_check.py): a test or CI step that
         # leaves an untracked or modified file in the checkout is reported here. Runs only when
